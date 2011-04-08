@@ -26,11 +26,10 @@
   <properties>
       <mainclass>org.apache.hedwig.server.netty.PubSubServer</mainclass>
   </properties>
-  <groupId>org.apache.hedwig</groupId>
-  <artifactId>server</artifactId>
+  <artifactId>hedwig-server</artifactId>
   <packaging>jar</packaging>
   <version>3.4.0-SNAPSHOT</version>
-  <name>server</name>
+  <name>hedwig-server</name>
   <url>http://maven.apache.org</url>
   <dependencies>
     <dependency>
@@ -40,8 +39,8 @@
       <scope>compile</scope>
     </dependency>
     <dependency>
-      <groupId>org.apache.hedwig</groupId>
-      <artifactId>client</artifactId>
+      <groupId>org.apache.bookkeeper</groupId>
+      <artifactId>hedwig-client</artifactId>
       <version>3.4.0-SNAPSHOT</version>
       <scope>compile</scope>
     </dependency>
