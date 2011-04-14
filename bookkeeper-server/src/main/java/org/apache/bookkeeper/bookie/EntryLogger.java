@@ -63,7 +63,7 @@ public class EntryLogger {
     /**
      * The maximum size of a entry logger file.
      */
-    final static long LOG_SIZE_LIMIT = Long.getLong("logSizeLimit", 2 * 1024 * 1024 * 1024L);
+    final long LOG_SIZE_LIMIT = Long.getLong("logSizeLimit", 2 * 1024 * 1024 * 1024L);
     private volatile BufferedChannel logChannel;
     /**
      * The 1K block at the head of the entry logger file
