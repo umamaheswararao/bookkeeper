@@ -398,13 +398,21 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
   public void halt() throws InterruptedException {
     bookieClient.close();
     bookieWatcher.halt();
+    
+    LOG.info("Halting bookie client and watcher.");  
+    
     if (ownChannelFactory) {
-      channelFactory.releaseExternalResources();
+        channelFactory.releaseExternalResources();
+        LOG.info("External resources released.");
     }
     if (ownZKHandle) {
-      zk.close();
+        zk.close();
+        LOG.info("ZooKeeper handle closed.");
     }
     callbackWorker.shutdown();
+    LOG.info("Shut down callback worker.");
+    
     mainWorkerPool.shutdown();
+    LOG.info("Main worker pool shut down.");
   }
 }
