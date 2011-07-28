@@ -319,19 +319,22 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
     }
   }
 
-  /**
-   * Add entry synchronously to an open ledger.
-   * 
-   * @param data
-   *         array of bytes to be written to the ledger
-   */
-
-  public long addEntry(byte[] data) throws InterruptedException, BKException {
-    LOG.debug("Adding entry " + data);
-    SyncCounter counter = new SyncCounter();
-    counter.inc();
-
-    asyncAddEntry(data, this, counter);
+    /**
+     * Add entry synchronously to an open ledger.
+     * 
+     * @param data
+     *         array of bytes to be written to the ledger
+     */
+    public long addEntry(byte[] data) throws InterruptedException, BKException {
+        return addEntry(data, 0, data.length);
+    }
+    
+    public long addEntry(byte[] data, int offset, int length) throws InterruptedException, BKException {
+        LOG.debug("Adding entry " + data);
+        SyncCounter counter = new SyncCounter();
+        counter.inc();
+        
+        asyncAddEntry(data, offset, length, this, counter);
     counter.block(0);
 
     return counter.getrc();
@@ -347,8 +350,13 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
    * @param ctx
    *          some control object
    */
-  public void asyncAddEntry(final byte[] data, final AddCallback cb,
-      final Object ctx) {
+    public void asyncAddEntry(final byte[] data, final AddCallback cb, 
+                              final Object ctx) {
+        asyncAddEntry(data, 0, data.length, cb, ctx);
+    }
+
+  public void asyncAddEntry(final byte[] data, final int offset, final int length, 
+                            final AddCallback cb, final Object ctx) {
       try{
           opCounterSem.acquire();
       } catch (InterruptedException e) {
@@ -369,11 +377,11 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
                   }
 
                   long entryId = ++lastAddPushed;
-                  long currentLength = addToLength(data.length);
+                  long currentLength = addToLength(length);
                   PendingAddOp op = new PendingAddOp(LedgerHandle.this, cb, ctx, entryId);
                   pendingAddOps.add(op);
                   ChannelBuffer toSend = macManager.computeDigestAndPackageForSending(
-                          entryId, lastAddConfirmed, currentLength, data);
+                          entryId, lastAddConfirmed, currentLength, data, offset, length);
                   op.initiate(toSend);
               }
           });
