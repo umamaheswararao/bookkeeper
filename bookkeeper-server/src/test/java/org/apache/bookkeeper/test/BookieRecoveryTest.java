@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
 
+import org.apache.bookkeeper.client.BookieWatcherAccessor;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.LedgerEntry;
 import org.apache.bookkeeper.client.LedgerHandle;
@@ -166,6 +167,13 @@ public class BookieRecoveryTest extends BaseTestCase {
         while(!server.isRunning()){
             Thread.sleep(500);
         }
+        try {
+            BookieWatcherAccessor.forceBookieListRefresh(bkc);
+        } catch (KeeperException ke) {
+            throw new IOException("Error ensuring bookie list is up to date",
+                                  ke);
+        }
+
         LOG.info("New bookie on port " + port + " has been created.");
     }
 
