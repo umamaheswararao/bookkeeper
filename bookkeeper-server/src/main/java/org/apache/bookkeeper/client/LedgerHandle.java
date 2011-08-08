@@ -379,9 +379,17 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
      *          object implementing callbackinterface
      * @param ctx
      *          some control object
+     * @throws ArrayIndexOutOfBoundsException if offset or length is negative or 
+     *          offset and length sum to a value higher than the length of data.
      */
     public void asyncAddEntry(final byte[] data, final int offset, final int length, 
                               final AddCallback cb, final Object ctx) {
+        if (offset < 0 || length < 0
+            || (offset + length) > data.length) {
+            throw new ArrayIndexOutOfBoundsException(
+                    "Invalid values for offset("+offset
+                    +") or length("+length+")");
+        }
         try{
             opCounterSem.acquire();
         } catch (InterruptedException e) {

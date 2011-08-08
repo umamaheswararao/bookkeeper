@@ -262,13 +262,12 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
             ledgerId = lh.getId();
             LOG.info("Ledger ID: " + lh.getId());
             byte bytes[] = {'a','b','c','d','e','f','g','h','i'};
-            for (int i = 0; i < bytes.length; i++) {
-                lh.asyncAddEntry(bytes, i, bytes.length - i, this, sync);
-            }
-            for (int i = 0; i < (bytes.length-3); i++) {
-                lh.asyncAddEntry(bytes, 3, (bytes.length-3) - i, this, sync);
-            }
-            int numEntries = bytes.length + (bytes.length-3);
+            
+            lh.asyncAddEntry(bytes, 0, bytes.length, this, sync);
+            lh.asyncAddEntry(bytes, 0, 4, this, sync); // abcd
+            lh.asyncAddEntry(bytes, 3, 4, this, sync); // defg
+            lh.asyncAddEntry(bytes, 3, (bytes.length-3), this, sync); // defghi
+            int numEntries = 4;
 
             // wait for all entries to be acknowledged
             synchronized (sync) {
@@ -277,6 +276,39 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
                     sync.wait();
                 }
             }
+
+            try {
+                lh.asyncAddEntry(bytes, -1, bytes.length, this, sync); 
+                fail("Shouldn't be able to use negative offset");
+            } catch (ArrayIndexOutOfBoundsException aiob) {
+                // expected
+            }
+            try {
+                lh.asyncAddEntry(bytes, 0, bytes.length+1, this, sync); 
+                fail("Shouldn't be able to use that much length");
+            } catch (ArrayIndexOutOfBoundsException aiob) {
+                // expected
+            }
+            try {
+                lh.asyncAddEntry(bytes, -1, bytes.length+2, this, sync); 
+                fail("Shouldn't be able to use negative offset "
+                     + "with that much length");
+            } catch (ArrayIndexOutOfBoundsException aiob) {
+                // expected
+            }
+            try {
+                lh.asyncAddEntry(bytes, 4, -3, this, sync); 
+                fail("Shouldn't be able to use negative length");
+            } catch (ArrayIndexOutOfBoundsException aiob) {
+                // expected
+            }
+            try {
+                lh.asyncAddEntry(bytes, -4, -3, this, sync); 
+                fail("Shouldn't be able to use negative offset & length");
+            } catch (ArrayIndexOutOfBoundsException aiob) {
+                // expected
+            }
+            
 
             LOG.debug("*** WRITE COMPLETE ***");
             // close ledger
@@ -305,16 +337,30 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
             // values
             int i = 0;
             while (ls.hasMoreElements()) {
+                byte[] expected = null;
                 byte[] entry = ls.nextElement().getEntry();
-                if (i < bytes.length) { // it's the first set of writes
-                    assertTrue("Checking entry " + i + " for equality", 
-                               Arrays.bytesEqual(entry, 0, entry.length,
-                                                 bytes, i, bytes.length-i));
-                } else { // it's the second set of writes
-                    assertTrue("Checking entry " + i + " for equality", 
-                               Arrays.bytesEqual(entry, 0, entry.length,
-                                       bytes, 3, (bytes.length - 3)-i));
+                
+                switch (i) {
+                case 0: 
+                    expected = Arrays.copyOfRange(bytes, 0, bytes.length);
+                    break;
+                case 1: 
+                    expected = Arrays.copyOfRange(bytes, 0, 4);
+                    break;
+                case 2: 
+                    expected = Arrays.copyOfRange(bytes, 3, 3+4);
+                    break;
+                case 3: 
+                    expected = Arrays.copyOfRange(bytes, 3, 3+(bytes.length-3));
+                    break;
                 }
+                assertNotNull("There are more checks than writes", expected);
+                
+                String message = "Checking entry " + i + " for equality ["
+                    + new String(entry, "UTF-8") + "," 
+                    + new String(expected, "UTF-8") + "]";
+                assertTrue(message, Arrays.equals(entry, expected));
+
                 i++;
             }
             assertTrue("Checking number of read entries", i == numEntries);
