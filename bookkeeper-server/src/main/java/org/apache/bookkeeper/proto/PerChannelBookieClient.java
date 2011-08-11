@@ -94,7 +94,11 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         this.channelFactory = channelFactory;
     }
 
-    void connect() {
+    synchronized void connect() {
+        if (connectionAttemptInProgress) {
+            return;
+        }
+
         if (LOG.isDebugEnabled())
             LOG.debug("Connecting to bookie: " + addr);
 

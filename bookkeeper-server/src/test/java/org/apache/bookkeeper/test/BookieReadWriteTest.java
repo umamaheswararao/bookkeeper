@@ -118,7 +118,6 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
      */
     @Test
     public void testStreamingClients() throws IOException, KeeperException, BKException, InterruptedException {
-        bkc = new BookKeeper("127.0.0.1");
         lh = bkc.createLedger(digestType, ledgerPassword);
         // write a string so that we cna
         // create a buffer of a single bytes
@@ -168,8 +167,7 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
     @Test
     public void testReadWriteAsyncSingleClient() throws IOException {
         try {
-            // Create a BookKeeper client and a ledger
-            bkc = new BookKeeper("127.0.0.1");
+            // Create a ledger
             lh = bkc.createLedger(digestType, ledgerPassword);
             // bkc.initMessageDigest("SHA1");
             ledgerId = lh.getId();
@@ -291,9 +289,8 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
                        
             Integer throttle = 100;
             ThrottleTestCallback tcb = new ThrottleTestCallback(throttle);
-            // Create a BookKeeper client and a ledger
+            // Create a ledger
             System.setProperty("throttle", throttle.toString());
-            bkc = new BookKeeper("127.0.0.1");
             lh = bkc.createLedger(digestType, ledgerPassword);
             // bkc.initMessageDigest("SHA1");
             ledgerId = lh.getId();
@@ -387,8 +384,7 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
         String charset = "utf-8";
         LOG.debug("Default charset: " + Charset.defaultCharset());
         try {
-            // Create a BookKeeper client and a ledger
-            bkc = new BookKeeper("127.0.0.1");
+            // Create a ledger
             lh = bkc.createLedger(digestType, ledgerPassword);
             // bkc.initMessageDigest("SHA1");
             ledgerId = lh.getId();
@@ -461,8 +457,7 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
     @Test
     public void testReadWriteSyncSingleClient() throws IOException {
         try {
-            // Create a BookKeeper client and a ledger
-            bkc = new BookKeeper("127.0.0.1");
+            // Create a ledger
             lh = bkc.createLedger(digestType, ledgerPassword);
             // bkc.initMessageDigest("SHA1");
             ledgerId = lh.getId();
@@ -508,8 +503,7 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
     @Test
     public void testReadWriteZero() throws IOException {
         try {
-            // Create a BookKeeper client and a ledger
-            bkc = new BookKeeper("127.0.0.1");
+            // Create a ledger
             lh = bkc.createLedger(digestType, ledgerPassword);
             // bkc.initMessageDigest("SHA1");
             ledgerId = lh.getId();
@@ -556,8 +550,7 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
     @Test
     public void testMultiLedger() throws IOException {
         try {
-            // Create a BookKeeper client and a ledger
-            bkc = new BookKeeper("127.0.0.1");
+            // Create a ledger
             lh = bkc.createLedger(digestType, ledgerPassword);
             lh2 = bkc.createLedger(digestType, ledgerPassword);
 
@@ -616,8 +609,7 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
     @Test
     public void testReadWriteAsyncLength() throws IOException {
         try {
-            // Create a BookKeeper client and a ledger
-            bkc = new BookKeeper("127.0.0.1");
+            // Create a ledger
             lh = bkc.createLedger(digestType, ledgerPassword);
             // bkc.initMessageDigest("SHA1");
             ledgerId = lh.getId();
@@ -672,7 +664,6 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
             int numLedgers = 10000;
             Long throttle = (((Double) Math.max(1.0, ((double) 10000/numLedgers))).longValue());
             System.setProperty("throttle", throttle.toString());
-            bkc = new BookKeeper("127.0.0.1");
             LedgerHandle[] lhArray = new LedgerHandle[numLedgers];
             for(int i = 0; i < numLedgers; i++){
                 lhArray[i] = bkc.createLedger(3, 2, BookKeeper.DigestType.CRC32, new byte[] {'a', 'b'});
@@ -720,8 +711,7 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
     
     public void testReadFromOpenLedger() throws IOException {
         try {
-            // Create a BookKeeper client and a ledger
-            bkc = new BookKeeper("127.0.0.1");
+            // Create a ledger
             lh = bkc.createLedger(digestType, ledgerPassword);
             // bkc.initMessageDigest("SHA1");
             ledgerId = lh.getId();
@@ -799,8 +789,7 @@ implements AddCallback, ReadCallback, ReadLastConfirmedCallback {
     @Test
     public void testLastConfirmedAdd() throws IOException {
         try {
-            // Create a BookKeeper client and a ledger
-            bkc = new BookKeeper("127.0.0.1");
+            // Create a ledger
             lh = bkc.createLedger(digestType, ledgerPassword);
             // bkc.initMessageDigest("SHA1");
             ledgerId = lh.getId();
