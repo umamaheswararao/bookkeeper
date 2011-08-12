@@ -95,6 +95,18 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
     }
 
     void connect() {
+        if (connectionAttemptInProgress) {
+            return;
+        } else {
+            synchronized(this) {
+                if (connectionAttemptInProgress) {
+                    return;
+                }
+                // Start the connection attempt to the input server host.
+                connectionAttemptInProgress = true;
+            }
+        } 
+
         if (LOG.isDebugEnabled())
             LOG.debug("Connecting to bookie: " + addr);
 
@@ -105,8 +117,6 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         bootstrap.setOption("tcpNoDelay", true);
         bootstrap.setOption("keepAlive", true);
 
-        // Start the connection attempt to the input server host.
-        connectionAttemptInProgress = true;
 
         ChannelFuture future = bootstrap.connect(addr);
 
@@ -175,10 +185,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
                     // succeeds
                     pendingOps.add(op);
 
-                    if (!connectionAttemptInProgress) {
-                        connect();
-                    }
-
+                    connect();
                 }
             }
         }
