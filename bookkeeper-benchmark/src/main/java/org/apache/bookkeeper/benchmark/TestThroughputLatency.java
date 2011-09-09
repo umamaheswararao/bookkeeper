@@ -21,6 +21,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     Semaphore sem;
     long length;
     int paceInNanos;
+    int throttle;
     
     class Context {
         long localStartTime;
@@ -40,6 +41,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         //this.sem = new Semaphore(Integer.parseInt(throttle));
         this.paceInNanos = paceInNanos;
         System.setProperty("throttle", throttle);
+        this.throttle = Integer.parseInt(throttle);
         bk = new BookKeeper(servers);
         this.length = Long.parseLong(length);
         this.counter = new AtomicLong(0);
@@ -67,23 +69,40 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     public void run() {
         LOG.info("Running...");
         long start = previous = System.currentTimeMillis();
+        long millis = paceInNanos/1000000;
+        int nanos = paceInNanos%1000000;
+        long lastNanoTime = System.nanoTime();
+        byte messageCount = 0;
         while(!Thread.currentThread().isInterrupted()) {
             if (paceInNanos > 0) {
                 try {
-                    long millis = paceInNanos/1000000;
-                    paceInNanos = paceInNanos%1000000;
-                    Thread.sleep(millis, paceInNanos);
+                    Thread.sleep(millis, nanos);
                 } catch (InterruptedException e) {
                     break;
                 }
             }
             //sem.acquire();
-            lh.asyncAddEntry(bytes, this, new Context(counter.getAndIncrement(), System.nanoTime()));
+            long nanoTime = System.nanoTime();
+            int toSend = throttle;
+            if (paceInNanos > 0) {
+                toSend = (int) ((nanoTime-lastNanoTime)/paceInNanos);
+                if (toSend > 100 && (++messageCount&0xff) < 5) {
+                    LOG.error("We are sending " + toSend + " ops in this interval");
+                }
+            }
+            int limit = (int) (throttle - counter.get());
+            if (toSend > limit) {
+                toSend = limit;
+            }
+            for(int i = 0; i < toSend; i++) {
+                lh.asyncAddEntry(bytes, this, new Context(counter.getAndIncrement(), nanoTime));
+            }
+            lastNanoTime = nanoTime;
         }
         
         try {
             synchronized (this) {
-                if(this.counter.get() != 0)
+                while(this.counter.get() == throttle)
                     wait();
             }
         } catch(InterruptedException e) {
@@ -128,7 +147,8 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         
         //sem.release();
         synchronized(this) {
-            if(counter.decrementAndGet() == 0)
+            // we the counter was at throttle we need to notify
+            if(counter.decrementAndGet() == throttle-1)
                 notify();
         }
     }
