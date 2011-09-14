@@ -1,6 +1,7 @@
 package org.apache.bookkeeper.benchmark;
 
 import java.io.IOException;
+import java.util.Random;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -15,13 +16,14 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     static Logger LOG = Logger.getLogger(TestThroughputLatency.class);
 
     BookKeeper bk;
-    LedgerHandle lh;
+    LedgerHandle lh[];
     AtomicLong counter;
     AtomicLong completions = new AtomicLong(0);
     Semaphore sem;
     long length;
     int paceInNanos;
     int throttle;
+    int numberOfLedgers = 1;
     
     class Context {
         long localStartTime;
@@ -34,7 +36,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         }
     }
     
-    public TestThroughputLatency(int paceInNanos, String length, String ensemble, String qSize, String throttle, String servers) 
+    public TestThroughputLatency(int paceInNanos, String length, String ensemble, String qSize, String throttle, String numberOfLedgers, String servers) 
     throws KeeperException, 
         IOException, 
         InterruptedException {
@@ -45,17 +47,23 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         bk = new BookKeeper(servers);
         this.length = Long.parseLong(length);
         this.counter = new AtomicLong(0);
+        this.numberOfLedgers = Integer.parseInt(numberOfLedgers);
         try{
             //System.setProperty("throttle", throttle.toString());
-            lh = bk.createLedger(Integer.parseInt(ensemble), Integer.parseInt(qSize), BookKeeper.DigestType.CRC32, new byte[] {'a', 'b'});
+            lh = new LedgerHandle[this.numberOfLedgers];
+            for(int i = 0; i < this.numberOfLedgers; i++) {
+                lh[i] = bk.createLedger(Integer.parseInt(ensemble), Integer.parseInt(qSize), BookKeeper.DigestType.CRC32, new byte[] {'a', 'b'});
+            }
         } catch (BKException e) {
             e.printStackTrace();
         } 
     }
     
-    public void close() 
-    throws InterruptedException {
-        lh.close();
+    Random rand = new Random();
+    public void close() throws InterruptedException {
+        for(int i = 0; i < numberOfLedgers; i++) {
+            lh[i].close();
+        }
         bk.halt();
     }
     
@@ -95,7 +103,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
                 toSend = limit;
             }
             for(int i = 0; i < toSend; i++) {
-                lh.asyncAddEntry(bytes, this, new Context(counter.getAndIncrement(), nanoTime));
+                lh[rand.nextInt(numberOfLedgers)].asyncAddEntry(bytes, this, new Context(counter.getAndIncrement(), nanoTime));
             }
             lastNanoTime = nanoTime;
         }
@@ -169,12 +177,12 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     
     public static void main(String[] args) 
     throws KeeperException, IOException, InterruptedException {
-        if (args.length < 6) {
-            System.err.println("USAGE: " + TestThroughputLatency.class.getName() + " running_time(secs) sizeof_entry ensemble_size quorum_size throttle throughput(ops/sec) zk_server\n");
+        if (args.length < 7) {
+            System.err.println("USAGE: " + TestThroughputLatency.class.getName() + " running_time(secs) sizeof_entry ensemble_size quorum_size throttle throughput(ops/sec) number_of_ledgers zk_server\n");
             System.exit(2);
         }
         StringBuffer servers_sb = new StringBuffer();
-        for (int i = 6; i < args.length; i++){
+        for (int i = 7; i < args.length; i++){
             servers_sb.append(args[i] + " ");
         }
     
@@ -185,13 +193,14 @@ public class TestThroughputLatency implements AddCallback, Runnable {
                 ", quorum size" + args[3] + 
                 ", throttle: " + args[4] + 
                 ", throughput(ops/sec): " + args[5] +
+                ", number of ledgers: " + args[6] +
                 ", zk servers: " + servers);
         final int opsPerSec = Integer.parseInt(args[5]);
         int paceInNanos = 0;
         if (opsPerSec != 0) {
             paceInNanos = 1000000000/opsPerSec;
         }
-        TestThroughputLatency ttl = new TestThroughputLatency(paceInNanos, args[1], args[2], args[3], args[4], servers);
+        TestThroughputLatency ttl = new TestThroughputLatency(paceInNanos, args[1], args[2], args[3], args[4], args[5], servers);
         
         int length = Integer.parseInt(args[1]);
         StringBuffer sb = new StringBuffer();
