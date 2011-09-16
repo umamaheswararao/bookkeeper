@@ -74,6 +74,12 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         bytes = data.getBytes();
     }
     
+    int lastLedger = 0;
+    private int getRandomLedger() {
+        lastLedger = (lastLedger+1)%numberOfLedgers;
+        return lastLedger;
+    }
+    
     public void run() {
         LOG.info("Running...");
         long start = previous = System.currentTimeMillis();
@@ -103,7 +109,13 @@ public class TestThroughputLatency implements AddCallback, Runnable {
                 toSend = limit;
             }
             for(int i = 0; i < toSend; i++) {
-                lh[rand.nextInt(numberOfLedgers)].asyncAddEntry(bytes, this, new Context(counter.getAndIncrement(), nanoTime));
+                final int index = getRandomLedger();
+                LedgerHandle h = lh[index];
+                if (h == null) {
+                    LOG.error("Handle " + index + " is null!");
+                } else {
+                    lh[index].asyncAddEntry(bytes, this, new Context(counter.getAndIncrement(), nanoTime));
+                }
             }
             lastNanoTime = nanoTime;
         }
@@ -127,7 +139,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     long totalTime = 0;
     volatile double avgLatency = 0;
     @Override
-    public void addComplete(int rc, LedgerHandle lh, long entryId, Object ctx) {
+    synchronized public void addComplete(int rc, LedgerHandle lh, long entryId, Object ctx) {
         Context context = (Context) ctx;
         
         completions.incrementAndGet();
@@ -154,11 +166,9 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         }
         
         //sem.release();
-        synchronized(this) {
-            // we the counter was at throttle we need to notify
-            if(counter.decrementAndGet() == throttle-1)
-                notify();
-        }
+        // we the counter was at throttle we need to notify
+        if(counter.decrementAndGet() == throttle-1)
+            notify();
     }
     
     /**
@@ -200,7 +210,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         if (opsPerSec != 0) {
             paceInNanos = 1000000000/opsPerSec;
         }
-        TestThroughputLatency ttl = new TestThroughputLatency(paceInNanos, args[1], args[2], args[3], args[4], args[5], servers);
+        TestThroughputLatency ttl = new TestThroughputLatency(paceInNanos, args[1], args[2], args[3], args[4], args[6], servers);
         
         int length = Integer.parseInt(args[1]);
         StringBuffer sb = new StringBuffer();
