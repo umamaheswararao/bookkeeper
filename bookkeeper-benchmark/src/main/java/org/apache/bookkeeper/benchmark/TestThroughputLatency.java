@@ -210,16 +210,26 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         if (opsPerSec != 0) {
             paceInNanos = 1000000000/opsPerSec;
         }
-        TestThroughputLatency ttl = new TestThroughputLatency(paceInNanos, args[1], args[2], args[3], args[4], args[6], servers);
-        
         int length = Integer.parseInt(args[1]);
         StringBuffer sb = new StringBuffer();
         while(length-- > 0){
             sb.append('a');
         }
         long totalTime = runningTime*1000;
+        
+        // Do a warmup run
+        TestThroughputLatency ttl = new TestThroughputLatency(paceInNanos, args[1], args[2], args[3], args[4], args[6], servers);        
         ttl.setEntryData(sb.toString());
-        final Thread thread = new Thread(ttl);
+        Thread thread = new Thread(ttl);
+        thread.start();
+        Thread.sleep(3000);
+        thread.interrupt();
+        Thread.sleep(2000);
+        
+        // Now do the benchmark
+        ttl = new TestThroughputLatency(paceInNanos, args[1], args[2], args[3], args[4], args[6], servers);        
+        ttl.setEntryData(sb.toString());
+        thread = new Thread(ttl);
         thread.start();
         Thread.sleep(totalTime);
         thread.interrupt();

@@ -140,17 +140,13 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
 
                     PerChannelBookieClient.this.channel = channel;
 
-                    // trick to not do operations under the lock, take the list
-                    // of pending ops and assign it to a new variable, while
-                    // emptying the pending ops by just assigning it to a new
-                    // list
-                    oldPendingOps = pendingOps;
+                    for (GenericCallback<Void> pendingOp : pendingOps) {
+                        pendingOp.operationComplete(rc, null);
+                    }
+
                     pendingOps = new ArrayDeque<GenericCallback<Void>>();
                 }
 
-                for (GenericCallback<Void> pendingOp : oldPendingOps) {
-                    pendingOp.operationComplete(rc, null);
-                }
             }
         });
     }
@@ -158,22 +154,19 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
     void connectIfNeededAndDoOp(GenericCallback<Void> op) {
         boolean doOpNow;
 
-        // common case without lock first
-        if (channel != null && state == ConnectionState.CONNECTED) {
-            doOpNow = true;
-        } else {
-
-            synchronized (this) {
-                // check again under lock
-                if (channel != null && state == ConnectionState.CONNECTED) {
-                    doOpNow = true;
+        synchronized (this) {
+            if (channel != null && state == ConnectionState.CONNECTED) {
+                if (pendingOps.size() == 0) {
+                    op.operationComplete(BKException.Code.OK, null);
                 } else {
-
-                    // if reached here, channel is either null (first connection
-                    // attempt),
-                    // or the channel is disconnected
-                    doOpNow = false;
-
+                    // connection attempt is still in progress, queue up this
+                    // op. Op will be executed when connection attempt either
+                    // fails
+                    // or
+                    // succeeds
+                    pendingOps.add(op);
+                }
+            } else {
                     // connection attempt is still in progress, queue up this
                     // op. Op will be executed when connection attempt either
                     // fails
@@ -182,14 +175,8 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
                     pendingOps.add(op);
 
                     connect();
-                }
             }
         }
-
-        if (doOpNow) {
-            op.operationComplete(BKException.Code.OK, null);
-        }
-
     }
 
     /**
