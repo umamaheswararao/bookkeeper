@@ -1,7 +1,7 @@
 package org.apache.bookkeeper.proto;
 
 /*
- * 
+ *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -9,16 +9,16 @@ package org.apache.bookkeeper.proto;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
- * 
+ *
  */
 
 import java.io.IOException;
@@ -39,7 +39,7 @@ import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
 
 /**
  * Implements the client-side part of the BookKeeper protocol.
- * 
+ *
  */
 public class BookieClient {
     static final Logger LOG = Logger.getLogger(BookieClient.class);
@@ -64,8 +64,6 @@ public class BookieClient {
             PerChannelBookieClient prevChannel = channels.putIfAbsent(addr, channel);
             if (prevChannel != null) {
                 channel = prevChannel;
-            } else {
-                channel.connect();
             }
         }
 
@@ -73,7 +71,7 @@ public class BookieClient {
     }
 
     public void addEntry(final InetSocketAddress addr, final long ledgerId, final byte[] masterKey, final long entryId,
-            final ChannelBuffer toSend, final WriteCallback cb, final Object ctx) {
+                         final ChannelBuffer toSend, final WriteCallback cb, final Object ctx) {
 
         final PerChannelBookieClient client = lookupClient(addr);
 
@@ -90,7 +88,7 @@ public class BookieClient {
     }
 
     public void readEntry(final InetSocketAddress addr, final long ledgerId, final long entryId,
-            final ReadEntryCallback cb, final Object ctx) {
+                          final ReadEntryCallback cb, final Object ctx) {
 
         final PerChannelBookieClient client = lookupClient(addr);
 
@@ -107,8 +105,8 @@ public class BookieClient {
         });
     }
 
-    public void close(){
-        for (PerChannelBookieClient channel: channels.values()){
+    public void close() {
+        for (PerChannelBookieClient channel: channels.values()) {
             channel.close();
         }
     }
