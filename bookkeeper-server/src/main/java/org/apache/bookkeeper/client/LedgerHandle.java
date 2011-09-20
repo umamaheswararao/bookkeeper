@@ -193,7 +193,8 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
 
     public void writeLedgerConfig(StatCallback callback, Object ctx) {
         bk.getZkHandle().setData(StringUtils.getLedgerNodePath(ledgerId),
-                                 metadata.serialize(), -1, callback, ctx);
+                                 metadata.serialize(), metadata.znodeVersion, 
+                                 callback, ctx);
     }
 
     /**
@@ -253,6 +254,7 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
                     @Override
                     public void processResult(int rc, String path, Object subctx,
                     Stat stat) {
+                        metadata.znodeVersion = stat.getVersion();
                         if (rc != KeeperException.Code.OK.intValue()) {
                             cb.closeComplete(BKException.Code.ZKException, LedgerHandle.this,
                                              ctx);

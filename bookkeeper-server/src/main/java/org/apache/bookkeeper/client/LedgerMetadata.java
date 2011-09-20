@@ -54,7 +54,8 @@ public class LedgerMetadata {
     long close;
     private SortedMap<Long, ArrayList<InetSocketAddress>> ensembles = new TreeMap<Long, ArrayList<InetSocketAddress>>();
     ArrayList<InetSocketAddress> currentEnsemble;
-
+    int znodeVersion = -1;
+    
     public LedgerMetadata(int ensembleSize, int quorumSize) {
         this.ensembleSize = ensembleSize;
         this.quorumSize = quorumSize;
@@ -208,6 +209,25 @@ public class LedgerMetadata {
         } catch (NumberFormatException e) {
             throw new IOException(e);
         }
+        return lc;
+    }
+    
+    /**
+     * Parses a given byte array and transforms into a LedgerConfig object
+     *
+     * @param array
+     *            byte array to parse
+     * @para, verion
+     *            znode version
+     * @return LedgerConfig
+     * @throws IOException
+     *             if the given byte[] cannot be parsed
+     */
+
+    static LedgerMetadata parseConfig(byte[] bytes, int version) throws IOException {
+        LedgerMetadata lc = LedgerMetadata.parseConfig(bytes);
+        lc.znodeVersion = version;
+        
         return lc;
     }
 
