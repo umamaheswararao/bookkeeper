@@ -161,6 +161,9 @@ class LedgerCreateOp implements StringCallback, StatCallback {
      * @see org.apache.zookeeper.AsyncCallback.StatCallback#processResult(int, String, Object, Stat)
      */
     public void processResult(int rc, String path, Object ctx, Stat stat) {
+        if (rc == KeeperException.Code.OK.intValue()) {
+            lh.metadata.znodeVersion = stat.getVersion();
+        }
         cb.createComplete(rc, lh, this.ctx);
     }
 

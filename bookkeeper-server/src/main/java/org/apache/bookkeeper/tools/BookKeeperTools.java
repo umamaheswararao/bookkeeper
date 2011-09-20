@@ -41,6 +41,7 @@ import org.apache.bookkeeper.client.AsyncCallback.OpenCallback;
 import org.apache.bookkeeper.client.AsyncCallback.ReadCallback;
 import org.apache.bookkeeper.client.AsyncCallback.RecoverCallback;
 import org.apache.bookkeeper.client.BookKeeper.DigestType;
+import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.GenericCallback;
 import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.WriteCallback;
 import org.apache.log4j.Logger;
 import org.apache.zookeeper.AsyncCallback;
@@ -544,10 +545,27 @@ public class BookKeeperTools {
                             ensemble.remove(deadBookieIndex);
                             ensemble.add(deadBookieIndex, newBookie);
                         }
+                        final int outerRc = rc;
+                        final String outerPath = path;
+                        final Object outerCtx = ctx;
+
                         lh.writeLedgerConfig(new AsyncCallback.StatCallback() {
                             @Override
                             public void processResult(int rc, String path, Object ctx, Stat stat) {
-                                if (rc != Code.OK.intValue()) {
+                                if (rc == KeeperException.Code.BadVersion) {
+                                    lh.rereadMetadata(new GenericCallback<Void>() {
+                                            @Override
+                                            public void operationComplete(int rc, Void result) {
+                                                if (rc != BKException.Code.OK) {
+                                                    LOG.error("Error updating ledger ensembles rc = " + rc);
+                                                    ledgerMcb.processResult(rc, null, null);
+                                                } else {
+                                                    LedgerMultiCallbackWrapper.this.processResult(outerRc, outerPath, outerCtx);
+                                                }
+                                            }
+                                        });
+                                    return;
+                                } else if (rc != Code.OK.intValue()) {
                                     LOG.error("ZK error updating ledger config metadata for ledgerId: " + lh.getId(),
                                               KeeperException.create(KeeperException.Code.get(rc), path));
                                 } else {

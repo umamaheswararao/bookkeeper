@@ -29,6 +29,8 @@ import java.util.Enumeration;
 import java.util.Queue;
 import java.util.concurrent.Semaphore;
 
+import java.io.IOException;
+
 import org.apache.bookkeeper.client.AsyncCallback.ReadLastConfirmedCallback;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.AsyncCallback.AddCallback;
@@ -45,6 +47,7 @@ import org.apache.log4j.Logger;
 
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.AsyncCallback.StatCallback;
+import org.apache.zookeeper.AsyncCallback.DataCallback;
 import org.apache.zookeeper.data.Stat;
 import org.jboss.netty.buffer.ChannelBuffer;
 
@@ -57,7 +60,7 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
     final static long LAST_ADD_CONFIRMED = -1;
 
     final byte[] ledgerKey;
-    final LedgerMetadata metadata;
+    LedgerMetadata metadata;
     final BookKeeper bk;
     final long ledgerId;
     long lastAddPushed;
@@ -253,12 +256,24 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
                 writeLedgerConfig(new StatCallback() {
                     @Override
                     public void processResult(int rc, String path, Object subctx,
-                    Stat stat) {
-                        metadata.znodeVersion = stat.getVersion();
-                        if (rc != KeeperException.Code.OK.intValue()) {
+                                              Stat stat) {
+                        if (rc == KeeperException.Code.BadVersion) {
+                            rereadMetadata(new GenericCallback<Void>() {
+                                    @Override
+                                    public void operationComplete(int rc, Void result) {
+                                        if (rc != BKException.Code.OK) {
+                                            cb.closeComplete(BKException.Code.ZKException, LedgerHandle.this,
+                                                             ctx);
+                                        } else {
+                                            asyncClose(cb, ctx, rc);
+                                        }
+                                    }
+                                });
+                        } else if (rc != KeeperException.Code.OK.intValue()) {
                             cb.closeComplete(BKException.Code.ZKException, LedgerHandle.this,
                                              ctx);
                         } else {
+                            metadata.znodeVersion = stat.getVersion();
                             cb.closeComplete(BKException.Code.OK, LedgerHandle.this, ctx);
                         }
                     }
@@ -403,7 +418,7 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
             bk.mainWorkerPool.submitOrdered(ledgerId, new SafeRunnable() {
                 @Override
                 public void safeRun() {
-                    if (metadata.isClosed()) {
+                    if (metadata.isLedgerWritable()) {
                         LOG.warn("Attempt to add to closed ledger: " + ledgerId);
                         LedgerHandle.this.opCounterSem.release();
                         cb.addComplete(BKException.Code.LedgerClosedException,
@@ -511,7 +526,7 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
 
     }
 
-    void handleBookieFailure(InetSocketAddress addr, final int bookieIndex) {
+    void handleBookieFailure(final InetSocketAddress addr, final int bookieIndex) {
         InetSocketAddress newBookie;
 
         if (LOG.isDebugEnabled()) {
@@ -545,6 +560,21 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
         writeLedgerConfig(new StatCallback() {
             @Override
             public void processResult(final int rc, String path, Object ctx, Stat stat) {
+                if (rc == KeeperException.Code.BadVersion) {
+                    rereadMetadata(new GenericCallback<Void>() {
+                            @Override
+                            public void operationComplete(int rc, Void result) {
+                                if (rc != BKException.Code.OK) {
+                                    handleUnrecoverableErrorDuringAdd(BKException.Code.ZKException);
+                                } else {
+                                    handleBookieFailure(addr, bookieIndex);
+                                }
+                            }
+                        });
+                    return;
+                } else if (rc == KeeperException.Code.OK.intValue()) {
+                    metadata.znodeVersion = stat.getVersion();
+                }
 
                 bk.mainWorkerPool.submitOrdered(ledgerId, new SafeRunnable() {
                     @Override
@@ -567,15 +597,61 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
         }, null);
 
     }
+    
+    public void rereadMetadata(final GenericCallback<Void> cb) {
+        bk.getZkHandle().getData(StringUtils.getLedgerNodePath(ledgerId), false, 
+                new DataCallback() {
+                    public void processResult(int rc, String path, Object ctx, byte[] data, Stat stat) {
+                        if (rc != KeeperException.Code.OK.intValue()) {
+                            LOG.error("Error reading metadata from ledger, code =" + rc);
+                            cb.operationComplete(BKException.Code.ZKException, null);
+                            return;
+                        }
 
-    void recover(GenericCallback<Void> cb) {
+                        try {
+                            metadata = LedgerMetadata.parseConfig(data, stat.getVersion());
+                        } catch (IOException e) {
+                            LOG.error("Error parsing ledger metadata for ledger", e);
+                            cb.operationComplete(BKException.Code.ZKException, null);
+                        }
+                        cb.operationComplete(BKException.Code.OK, null);
+                    }
+                }, null);
+    }
+
+    void recover(final GenericCallback<Void> cb) {
         if (metadata.isClosed()) {
             // We are already closed, nothing to do
             cb.operationComplete(BKException.Code.OK, null);
             return;
         }
 
-        new LedgerRecoveryOp(this, cb).initiate();
+        metadata.markLedgerInRecover();
+
+        writeLedgerConfig(new StatCallback() {
+            @Override
+            public void processResult(final int rc, String path, Object ctx, Stat stat) {
+                if (rc == KeeperException.Code.BadVersion) {
+                    rereadMetadata(new GenericCallback<Void>() {
+                            @Override
+                            public void operationComplete(int rc, Void result) {
+                                if (rc != BKException.Code.OK) {
+                                    cb.operationComplete(rc, null);
+                                } else {
+                                    recover(cb);
+                                }
+                            }
+                        });
+                } else if (rc == KeeperException.Code.OK.intValue()) {
+                    metadata.znodeVersion = stat.getVersion();
+                    new LedgerRecoveryOp(LedgerHandle.this, cb).initiate();
+                } else {
+                    LOG.error("Error writing ledger config " +  rc 
+                              + " path = " + path);
+                    cb.operationComplete(BKException.Code.ZKException, null);
+                }
+            }
+        }, null);
     }
 
     static class NoopCloseCallback implements CloseCallback {

@@ -37,12 +37,16 @@ public class LedgerMetadata {
     static final Logger LOG = Logger.getLogger(LedgerMetadata.class);
 
     private static final String closed = "CLOSED";
+    private static final String inRecovery = "INRECOVERY";
+
     private static final String lSplitter = "\n";
     private static final String tSplitter = "\t";
 
     // can't use -1 for NOTCLOSED because that is reserved for a closed, empty
     // ledger
     public static final int NOTCLOSED = -101;
+    public static final int IN_RECOVERY = -102;
+
     public static final int METADATA_FORMAT_VERSION = 1;
     public static final String VERSION_KEY = "BookieMetadataFormatVersion";
 
@@ -86,6 +90,15 @@ public class LedgerMetadata {
 
     boolean isClosed() {
         return close != NOTCLOSED;
+    }
+    
+    void markLedgerInRecover() {
+        close = IN_RECOVERY;
+    }
+
+    boolean isLedgerWritable() {
+        return close != NOTCLOSED 
+            && close != IN_RECOVERY;
     }
 
     void close(long entryId) {
@@ -142,9 +155,11 @@ public class LedgerMetadata {
             }
         }
 
-        if (close != NOTCLOSED) {
+        if (close == IN_RECOVERY) {
+            s.append(lSplitter).append(close).append(tSplitter).append(inRecovery);
+        } else if (close != NOTCLOSED) {
             s.append(lSplitter).append(close).append(tSplitter).append(closed);
-        }
+        } 
 
         if (LOG.isDebugEnabled()) {
             LOG.debug("Serialized config: " + s.toString());
@@ -183,6 +198,9 @@ public class LedgerMetadata {
             } else {
                 lc.metadataFormatVersion = 0;
             }
+            if (lc.metadataFormatVersion > METADATA_FORMAT_VERSION) {
+                throw new IOException("Metadata format is newer than software can handle");
+            }
 
             if ((lines.length+i) < 2) {
                 throw new IOException("Quorum size or ensemble size absent from config: " + config);
@@ -197,6 +215,9 @@ public class LedgerMetadata {
 
                 if (parts[1].equals(closed)) {
                     lc.close = new Long(parts[0]);
+                    break;
+                } else if (parts[1].equals(inRecovery)) {
+                    lc.close = IN_RECOVERY;
                     break;
                 }
 
