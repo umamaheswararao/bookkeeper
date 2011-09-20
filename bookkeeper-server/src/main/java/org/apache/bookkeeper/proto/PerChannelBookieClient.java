@@ -30,6 +30,7 @@ import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.GenericCallback;
 import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.WriteCallback;
 import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.ReadEntryCallback;
+import static org.apache.bookkeeper.proto.BookieProtocol.PacketHeader;
 import org.apache.bookkeeper.util.OrderedSafeExecutor;
 import org.apache.bookkeeper.util.SafeRunnable;
 import org.apache.log4j.Logger;
@@ -225,7 +226,8 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
 
         ChannelBuffer header = channel.getConfig().getBufferFactory().getBuffer(totalHeaderSize);
         header.writeInt(totalHeaderSize - 4 + entrySize);
-        header.writeInt(BookieProtocol.ADDENTRY);
+        header.writeInt(new PacketHeader(BookieProtocol.PROTOCOL_VERSION, 
+                                         BookieProtocol.ADDENTRY, (short)0).toInt());
         header.writeBytes(masterKey);
 
         ChannelBuffer wrappedBuffer = ChannelBuffers.wrappedBuffer(header, toSend);
@@ -260,7 +262,8 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
 
         ChannelBuffer tmpEntry = channel.getConfig().getBufferFactory().getBuffer(totalHeaderSize);
         tmpEntry.writeInt(totalHeaderSize - 4);
-        tmpEntry.writeInt(BookieProtocol.READENTRY);
+        tmpEntry.writeInt(new PacketHeader(BookieProtocol.PROTOCOL_VERSION, 
+                                           BookieProtocol.READENTRY, (short)0).toInt());
         tmpEntry.writeLong(ledgerId);
         tmpEntry.writeLong(entryId);
 
@@ -419,9 +422,10 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         final ChannelBuffer buffer = (ChannelBuffer) e.getMessage();
         final int type, rc;
         final long ledgerId, entryId;
+        final PacketHeader header;
 
         try {
-            type = buffer.readInt();
+            header = PacketHeader.fromInt(buffer.readInt());
             rc = buffer.readInt();
             ledgerId = buffer.readLong();
             entryId = buffer.readLong();
@@ -433,7 +437,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         executor.submitOrdered(ledgerId, new SafeRunnable() {
             @Override
             public void safeRun() {
-                switch (type) {
+                switch (header.getOpCode()) {
                 case BookieProtocol.ADDENTRY:
                     handleAddResponse(ledgerId, entryId, rc);
                     break;
@@ -441,10 +445,10 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
                     handleReadResponse(ledgerId, entryId, rc, buffer);
                     break;
                 default:
-                    LOG.error("Unexpected response, type: " + type + " recieved from bookie: " + addr + " , ignoring");
+                    LOG.error("Unexpected response, type: " + header.getOpCode() 
+                              + " recieved from bookie: " + addr + " , ignoring");
                 }
             }
-
         });
     }
 
