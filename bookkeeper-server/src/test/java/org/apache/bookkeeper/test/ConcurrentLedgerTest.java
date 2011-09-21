@@ -136,7 +136,7 @@ public class ConcurrentLedgerTest extends TestCase {
         long start = System.currentTimeMillis();
         for(int i = 1; i <= totalwrites/ledgers; i++) {
             for(int j = 1; j <= ledgers; j++) {
-                ByteBuffer entry = bookie.readEntry(j, i);
+                ByteBuffer entry = bookie.readEntry(j, i, false);
                 // skip the ledger id and the entry id
                 entry.getLong();
                 entry.getLong();
@@ -172,7 +172,7 @@ public class ConcurrentLedgerTest extends TestCase {
                 bytes.position(0);
                 bytes.limit(bytes.capacity());
                 throttle.acquire();
-                bookie.addEntry(bytes, cb, counter, zeros);
+                bookie.addEntry(bytes, cb, counter, zeros, false, false);
             }
         }
         long finish = System.currentTimeMillis();

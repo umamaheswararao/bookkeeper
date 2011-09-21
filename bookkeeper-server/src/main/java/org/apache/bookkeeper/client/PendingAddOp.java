@@ -43,19 +43,27 @@ class PendingAddOp implements WriteCallback {
     boolean[] successesSoFar;
     int numResponsesPending;
     LedgerHandle lh;
+    boolean fencing;
+    boolean recovery;
 
     PendingAddOp(LedgerHandle lh, AddCallback cb, Object ctx, long entryId) {
+        this(lh, cb, ctx, entryId, false, false);
+    }
+
+    PendingAddOp(LedgerHandle lh, AddCallback cb, Object ctx, long entryId, boolean fencing, boolean recovery) {
         this.lh = lh;
         this.cb = cb;
         this.ctx = ctx;
         this.entryId = entryId;
+        this.recovery = recovery;
+        this.fencing = fencing;
         successesSoFar = new boolean[lh.metadata.quorumSize];
         numResponsesPending = successesSoFar.length;
     }
 
     void sendWriteRequest(int bookieIndex, int arrayIndex) {
         lh.bk.bookieClient.addEntry(lh.metadata.currentEnsemble.get(bookieIndex), lh.ledgerId, lh.ledgerKey, entryId, toSend,
-                                    this, arrayIndex);
+                this, arrayIndex, fencing, recovery);
     }
 
     void unsetSuccessAndSendWriteRequest(int bookieIndex) {

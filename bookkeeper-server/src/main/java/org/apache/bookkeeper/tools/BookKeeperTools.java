@@ -599,7 +599,7 @@ public class BookKeeperTools {
                     }
                 }
             }
-        }, null);
+            }, null, false);
     }
 
     /**
@@ -725,7 +725,7 @@ public class BookKeeperTools {
                          */
                         ledgerFragmentEntryMcb.processResult(rc, null, null);
                     }
-                }, null);
+                }, null, false, true);
             }
         }, null);
     }

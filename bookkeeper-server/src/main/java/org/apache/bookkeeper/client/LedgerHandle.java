@@ -244,6 +244,7 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
                 metadata.length = length;
                 // Close operation is idempotent, so no need to check if we are
                 // already closed
+
                 metadata.close(lastAddConfirmed);
                 errorOutPendingAdds(rc);
                 lastAddPushed = lastAddConfirmed;
@@ -265,6 +266,10 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
                                             cb.closeComplete(BKException.Code.ZKException, LedgerHandle.this,
                                                              ctx);
                                         } else {
+                                            if (metadata.isClosed()) {
+                                                lastAddConfirmed = lastAddPushed = metadata.close;
+                                                length = metadata.length;
+                                            }
                                             asyncClose(cb, ctx, rc);
                                         }
                                     }
@@ -321,6 +326,11 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
      */
     public void asyncReadEntries(long firstEntry, long lastEntry,
                                  ReadCallback cb, Object ctx) {
+        asyncReadEntries(firstEntry, lastEntry, cb, ctx, false);
+    }
+
+    void asyncReadEntries(long firstEntry, long lastEntry,
+                          ReadCallback cb, Object ctx, boolean recovery) {
         // Little sanity check
         if (firstEntry < 0 || lastEntry > lastAddConfirmed
                 || firstEntry > lastEntry) {
@@ -329,8 +339,7 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
         }
 
         try {
-            new PendingReadOp(this, firstEntry, lastEntry, cb, ctx).initiate();
-
+            new PendingReadOp(this, firstEntry, lastEntry, cb, ctx, recovery).initiate();
         } catch (InterruptedException e) {
             cb.readComplete(BKException.Code.InterruptedException, this, null, ctx);
         }
@@ -364,6 +373,10 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
 
         asyncAddEntry(data, offset, length, this, counter);
         counter.block(0);
+        
+        if (counter.getrc() != BKException.Code.OK) {
+            throw BKException.create(counter.getrc());
+        }
 
         return counter.getrc();
     }
@@ -401,6 +414,11 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
      */
     public void asyncAddEntry(final byte[] data, final int offset, final int length,
                               final AddCallback cb, final Object ctx) {
+        asyncAddEntry(data, offset, length, cb, ctx, false, false);
+    }
+
+    void asyncAddEntry(final byte[] data, final int offset, final int length,
+            final AddCallback cb, final Object ctx, final boolean fencing, final boolean recovery) {
         if (offset < 0 || length < 0
                 || (offset + length) > data.length) {
             throw new ArrayIndexOutOfBoundsException(
@@ -418,7 +436,7 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
             bk.mainWorkerPool.submitOrdered(ledgerId, new SafeRunnable() {
                 @Override
                 public void safeRun() {
-                    if (metadata.isLedgerWritable()) {
+                    if (metadata.isClosed()) {
                         LOG.warn("Attempt to add to closed ledger: " + ledgerId);
                         LedgerHandle.this.opCounterSem.release();
                         cb.addComplete(BKException.Code.LedgerClosedException,
@@ -428,7 +446,7 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
 
                     long entryId = ++lastAddPushed;
                     long currentLength = addToLength(length);
-                    PendingAddOp op = new PendingAddOp(LedgerHandle.this, cb, ctx, entryId);
+                    PendingAddOp op = new PendingAddOp(LedgerHandle.this, cb, ctx, entryId, fencing, recovery);
                     pendingAddOps.add(op);
                     ChannelBuffer toSend = macManager.computeDigestAndPackageForSending(
                                                entryId, lastAddConfirmed, currentLength, data, offset, length);
@@ -619,14 +637,17 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
                 }, null);
     }
 
-    void recover(final GenericCallback<Void> cb) {
+    void recover(final GenericCallback<Void> cb, final boolean fencing) {
         if (metadata.isClosed()) {
+            lastAddConfirmed = lastAddPushed = metadata.close;
+            length = metadata.length;
+
             // We are already closed, nothing to do
             cb.operationComplete(BKException.Code.OK, null);
             return;
         }
 
-        metadata.markLedgerInRecover();
+        metadata.markLedgerInRecovery();
 
         writeLedgerConfig(new StatCallback() {
             @Override
@@ -638,13 +659,13 @@ public class LedgerHandle implements ReadCallback, AddCallback, CloseCallback, R
                                 if (rc != BKException.Code.OK) {
                                     cb.operationComplete(rc, null);
                                 } else {
-                                    recover(cb);
+                                    recover(cb, fencing);
                                 }
                             }
                         });
                 } else if (rc == KeeperException.Code.OK.intValue()) {
                     metadata.znodeVersion = stat.getVersion();
-                    new LedgerRecoveryOp(LedgerHandle.this, cb).initiate();
+                    new LedgerRecoveryOp(LedgerHandle.this, cb, fencing).initiate();
                 } else {
                     LOG.error("Error writing ledger config " +  rc 
                               + " path = " + path);

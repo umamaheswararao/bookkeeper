@@ -47,6 +47,7 @@ class LedgerOpenOp implements DataCallback {
     final byte[] passwd;
     final DigestType digestType;
     final boolean unsafe;
+    final boolean fencing;
 
     /**
      * Constructor.
@@ -59,7 +60,9 @@ class LedgerOpenOp implements DataCallback {
      * @param ctx
      */
 
-    public LedgerOpenOp(BookKeeper bk, long ledgerId, DigestType digestType, byte[] passwd, boolean unsafe, OpenCallback cb, Object ctx) {
+    public LedgerOpenOp(BookKeeper bk, long ledgerId, DigestType digestType, byte[] passwd, boolean unsafe, 
+                        boolean fencing, 
+                        OpenCallback cb, Object ctx) {
         this.bk = bk;
         this.ledgerId = ledgerId;
         this.passwd = passwd;
@@ -67,6 +70,7 @@ class LedgerOpenOp implements DataCallback {
         this.ctx = ctx;
         this.digestType = digestType;
         this.unsafe = unsafe;
+        this.fencing = fencing;
     }
 
     /**
@@ -122,7 +126,7 @@ class LedgerOpenOp implements DataCallback {
             return;
         }
 
-        if (metadata.close != LedgerMetadata.NOTCLOSED) {
+        if (metadata.isClosed()) {
             // Ledger was closed properly
             cb.openComplete(BKException.Code.OK, lh, this.ctx);
             return;
@@ -138,6 +142,6 @@ class LedgerOpenOp implements DataCallback {
                     cb.openComplete(BKException.Code.OK, lh, LedgerOpenOp.this.ctx);
                 }
             }
-        });
+                }, fencing);
     }
 }

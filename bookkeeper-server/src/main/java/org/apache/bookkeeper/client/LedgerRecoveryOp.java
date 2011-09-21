@@ -27,6 +27,7 @@ import org.apache.bookkeeper.client.LedgerHandle.NoopCloseCallback;
 import org.apache.bookkeeper.client.DigestManager.RecoveryData;
 import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.ReadEntryCallback;
 import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.GenericCallback;
+import org.apache.bookkeeper.client.AsyncCallback.CloseCallback;
 import org.apache.log4j.Logger;
 import org.jboss.netty.buffer.ChannelBuffer;
 
@@ -46,18 +47,20 @@ class LedgerRecoveryOp implements ReadEntryCallback, ReadCallback, AddCallback {
     long maxAddPushed = -1;
     long maxAddConfirmed = -1;
     long maxLength = 0;
-
+    boolean fencing = false;
     GenericCallback<Void> cb;
 
-    public LedgerRecoveryOp(LedgerHandle lh, GenericCallback<Void> cb) {
+    public LedgerRecoveryOp(LedgerHandle lh, GenericCallback<Void> cb, boolean fencing) {
         this.cb = cb;
         this.lh = lh;
+        this.fencing = fencing;
         numResponsesPending = lh.metadata.ensembleSize;
     }
 
     public void initiate() {
+        LOG.info("IK Recover from ensemble" + lh.metadata.currentEnsemble);
         for (int i = 0; i < lh.metadata.currentEnsemble.size(); i++) {
-            lh.bk.bookieClient.readEntry(lh.metadata.currentEnsemble.get(i), lh.ledgerId, LedgerHandle.LAST_ADD_CONFIRMED, this, i);
+            lh.bk.bookieClient.readEntry(lh.metadata.currentEnsemble.get(i), lh.ledgerId, LedgerHandle.LAST_ADD_CONFIRMED, this, i, fencing);
         }
     }
 
@@ -120,7 +123,7 @@ class LedgerRecoveryOp implements ReadEntryCallback, ReadCallback, AddCallback {
      */
     private void doRecoveryRead() {
         lh.lastAddConfirmed++;
-        lh.asyncReadEntries(lh.lastAddConfirmed, lh.lastAddConfirmed, this, null);
+        lh.asyncReadEntries(lh.lastAddConfirmed, lh.lastAddConfirmed, this, null, fencing);
     }
 
     @Override
@@ -137,20 +140,19 @@ class LedgerRecoveryOp implements ReadEntryCallback, ReadCallback, AddCallback {
              * be added again when processing the call to add it.
              */
             lh.length = entry.getLength() - (long) data.length;
-            lh.asyncAddEntry(data, this, null);
+            lh.asyncAddEntry(data, 0, data.length, this, null, fencing, true);
 
             return;
         }
 
         if (rc == BKException.Code.NoSuchEntryException || rc == BKException.Code.NoSuchLedgerExistsException) {
-            lh.asyncClose(NoopCloseCallback.instance, null);
-            // we don't need to wait for the close to complete. Since we mark
-            // the
-            // ledger closed in memory, the application wont be able to add to
-            // it
-
-            cb.operationComplete(BKException.Code.OK, null);
-            LOG.debug("After closing length is: " + lh.getLength());
+            lh.asyncClose(new CloseCallback() {
+                    @Override
+                    public void closeComplete(int rc, LedgerHandle lh, Object ctx) {
+                        cb.operationComplete(rc, null);
+                        LOG.debug("After closing length is: " + lh.getLength());
+                    } 
+                }, null);
             return;
         }
 

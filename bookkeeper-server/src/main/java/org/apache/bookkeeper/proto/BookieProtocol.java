@@ -132,4 +132,7 @@ public interface BookieProtocol {
      * The server is a different version to the client
      */
     public static final int EBADVERSION = 103;
+
+    public static final short FLAG_FENCING = 0x0001;
+    public static final short FLAG_RECOVERY = 0x0002;
 }

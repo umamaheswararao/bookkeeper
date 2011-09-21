@@ -283,7 +283,13 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
     public void asyncOpenLedger(long lId, DigestType digestType, byte passwd[],
                                 OpenCallback cb, Object ctx) {
 
-        new LedgerOpenOp(this, lId, digestType, passwd, false, cb, ctx).initiate();
+        asyncOpenLedger(lId, digestType, passwd, cb, ctx, true);
+    }
+
+    public void asyncOpenLedger(long lId, DigestType digestType, byte passwd[],
+            OpenCallback cb, Object ctx, boolean fencing) {
+
+        new LedgerOpenOp(this, lId, digestType, passwd, false, fencing, cb, ctx).initiate();
 
     }
 
@@ -308,7 +314,7 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
     public void asyncOpenLedgerNoRecovery(long lId, DigestType digestType, byte passwd[],
                                           OpenCallback cb, Object ctx) {
 
-        new LedgerOpenOp(this, lId, digestType, passwd, true, cb, ctx).initiate();
+        new LedgerOpenOp(this, lId, digestType, passwd, true, false, cb, ctx).initiate();
 
     }
 

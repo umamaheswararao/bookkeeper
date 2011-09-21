@@ -150,9 +150,10 @@ public class BookieServer implements NIOServerFactory.PacketProcessor, Bookkeepe
     public void processPacket(ByteBuffer packet, Cnxn src) {
         PacketHeader h = PacketHeader.fromInt(packet.getInt());
 
-        ByteBuffer bb = packet.duplicate();
-        long ledgerId = bb.getLong();
-        long entryId = bb.getLong();
+        short flags = h.getFlags();
+
+        long ledgerId = 0; 
+        long entryId = 0; 
         
         if (h.getVersion() != BookieProtocol.PROTOCOL_VERSION) {
             LOG.error("Invalid protocol version, expected " + BookieProtocol.PROTOCOL_VERSION
@@ -167,8 +168,12 @@ public class BookieServer implements NIOServerFactory.PacketProcessor, Bookkeepe
             try {
                 byte[] masterKey = new byte[20];
                 packet.get(masterKey, 0, 20);
+                ByteBuffer bb = packet.duplicate();
+                ledgerId = bb.getLong();
+                entryId = bb.getLong();
                 // LOG.debug("Master key: " + new String(masterKey));
-                bookie.addEntry(packet.slice(), this, src, masterKey);
+                bookie.addEntry(packet.slice(), this, src, masterKey, 
+                                (flags & BookieProtocol.FLAG_FENCING) > 0, (flags & BookieProtocol.FLAG_RECOVERY) > 0);
             } catch (IOException e) {
                 LOG.error("Error writing " + entryId + "@" + ledgerId, e);
                 src.sendResponse(buildResponse(BookieProtocol.EIO, h.getVersion(), h.getOpCode(), ledgerId, entryId));
@@ -178,11 +183,15 @@ public class BookieServer implements NIOServerFactory.PacketProcessor, Bookkeepe
             }
             break;
         case BookieProtocol.READENTRY:
+            ByteBuffer bb = packet.duplicate();
+            ledgerId = bb.getLong();
+            entryId = bb.getLong();
+
             ByteBuffer[] rsp = new ByteBuffer[2];
             LOG.debug("Received new read request: " + ledgerId + ", " + entryId);
             int errorCode = BookieProtocol.EIO;
             try {
-                rsp[1] = bookie.readEntry(ledgerId, entryId);
+                rsp[1] = bookie.readEntry(ledgerId, entryId, (flags & BookieProtocol.FLAG_FENCING) > 0);
                 LOG.debug("##### Read entry ##### " + rsp[1].remaining());
                 errorCode = BookieProtocol.EOK;
             } catch (Bookie.NoLedgerException e) {

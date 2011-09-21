@@ -43,6 +43,7 @@ public class LedgerDescriptor {
     }
 
     private ByteBuffer masterKey = null;
+    private boolean fenced = false;
 
     void setMasterKey(ByteBuffer masterKey) {
         this.masterKey = masterKey;
@@ -64,8 +65,18 @@ public class LedgerDescriptor {
     synchronized public int getRefCnt() {
         return refCnt;
     }
+    
+    synchronized void setFenced() {
+        fenced = true;
+    }
+    
+    boolean isFenced() {
+        return fenced;
+    }
+
     long addEntry(ByteBuffer entry) throws IOException {
         long ledgerId = entry.getLong();
+
         if (ledgerId != this.ledgerId) {
             throw new IOException("Entry for ledger " + ledgerId + " was sent to " + this.ledgerId);
         }

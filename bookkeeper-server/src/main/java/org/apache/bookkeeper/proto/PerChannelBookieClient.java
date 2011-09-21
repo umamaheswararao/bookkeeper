@@ -207,8 +207,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
      * @param ctx
      */
     void addEntry(final long ledgerId, byte[] masterKey, final long entryId, ChannelBuffer toSend, WriteCallback cb,
-                  Object ctx) {
-
+                  Object ctx, boolean fencing, boolean recovery) {
         final int entrySize = toSend.readableBytes();
 
         // if (totalBytesOutstanding.get() > maxMemory) {
@@ -223,11 +222,18 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         int totalHeaderSize = 4 // for the length of the packet
                               + 4 // for the type of request
                               + masterKey.length; // for the master key
+        short flags = 0;
+        if (recovery) {
+            flags |= BookieProtocol.FLAG_RECOVERY;
+        }
+        if (fencing) {
+            flags |= BookieProtocol.FLAG_FENCING;
+        }
 
         ChannelBuffer header = channel.getConfig().getBufferFactory().getBuffer(totalHeaderSize);
         header.writeInt(totalHeaderSize - 4 + entrySize);
         header.writeInt(new PacketHeader(BookieProtocol.PROTOCOL_VERSION, 
-                                         BookieProtocol.ADDENTRY, (short)0).toInt());
+                                         BookieProtocol.ADDENTRY, flags).toInt());
         header.writeBytes(masterKey);
 
         ChannelBuffer wrappedBuffer = ChannelBuffers.wrappedBuffer(header, toSend);
@@ -250,8 +256,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
 
     }
 
-    public void readEntry(final long ledgerId, final long entryId, ReadEntryCallback cb, Object ctx) {
-
+    public void readEntry(final long ledgerId, final long entryId, ReadEntryCallback cb, Object ctx, boolean fencing) {
         final CompletionKey key = new CompletionKey(ledgerId, entryId);
         readCompletions.put(key, new ReadCompletion(cb, ctx));
 
@@ -262,8 +267,12 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
 
         ChannelBuffer tmpEntry = channel.getConfig().getBufferFactory().getBuffer(totalHeaderSize);
         tmpEntry.writeInt(totalHeaderSize - 4);
+        short flags = 0;
+        if (fencing) {
+            flags |= BookieProtocol.FLAG_FENCING;
+        }
         tmpEntry.writeInt(new PacketHeader(BookieProtocol.PROTOCOL_VERSION, 
-                                           BookieProtocol.READENTRY, (short)0).toInt());
+                                           BookieProtocol.READENTRY, flags).toInt());
         tmpEntry.writeLong(ledgerId);
         tmpEntry.writeLong(entryId);
 
@@ -294,7 +303,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         executor.submitOrdered(key.ledgerId, new SafeRunnable() {
             @Override
             public void safeRun() {
-
+                //                LOG.info("IK Error out read :" + key);
                 ReadCompletion readCompletion = readCompletions.remove(key);
 
                 if (readCompletion != null) {
@@ -313,7 +322,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         executor.submitOrdered(key.ledgerId, new SafeRunnable() {
             @Override
             public void safeRun() {
-
+                //                LOG.info("IK Error out add :" + key);
                 AddCompletion addCompletion = addCompletions.remove(key);
 
                 if (addCompletion != null) {
@@ -470,6 +479,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         }
 
         AddCompletion ac;
+        //LOG.info("IK complete remove :" + new CompletionKey(ledgerId, entryId));
         ac = addCompletions.remove(new CompletionKey(ledgerId, entryId));
         if (ac == null) {
             LOG.error("Unexpected add response received from bookie: " + addr + " for ledger: " + ledgerId
@@ -503,6 +513,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         }
 
         CompletionKey key = new CompletionKey(ledgerId, entryId);
+        //        LOG.info("IK Error out read :" + key);
         ReadCompletion readCompletion = readCompletions.remove(key);
 
         if (readCompletion == null) {
@@ -511,6 +522,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
              * submits a read request with id -1, and receives a response with a
              * different entry id.
              */
+            //            LOG.info("IK Error out read :" + key);
             readCompletion = readCompletions.remove(new CompletionKey(ledgerId, -1));
         }
 
@@ -573,6 +585,9 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
             return ((int) ledgerId << 16) ^ ((int) entryId);
         }
 
+        public String toString() {
+            return String.format("LedgerEntry(%d, %d)", ledgerId, entryId);
+        }
     }
 
 }

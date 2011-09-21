@@ -89,16 +89,12 @@ public class LedgerMetadata {
     }
 
     boolean isClosed() {
-        return close != NOTCLOSED;
-    }
-    
-    void markLedgerInRecover() {
-        close = IN_RECOVERY;
-    }
-
-    boolean isLedgerWritable() {
         return close != NOTCLOSED 
             && close != IN_RECOVERY;
+    }
+    
+    void markLedgerInRecovery() {
+        close = IN_RECOVERY;
     }
 
     void close(long entryId) {

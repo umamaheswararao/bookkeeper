@@ -121,7 +121,7 @@ public class LedgerCacheTest extends TestCase {
                 MacDigestManager dm = new MacDigestManager(i, masterKey);
                 byte[] data = "0123456789".getBytes();
                 ByteBuffer entry = dm.computeDigestAndPackageForSending(0, 0, 10, data, 0, data.length).toByteBuffer();
-                bookie.addEntry(entry, new TestWriteCallback(), null, masterKey);
+                bookie.addEntry(entry, new TestWriteCallback(), null, masterKey, false, false);
             }
         } catch (IOException e) {
             LOG.error("Got IOException.", e);

@@ -55,15 +55,20 @@ class PendingReadOp implements Enumeration<LedgerEntry>, ReadEntryCallback {
     long numPendingReads;
     long startEntryId;
     long endEntryId;
-
+    boolean recovery;
+    
     PendingReadOp(LedgerHandle lh, long startEntryId, long endEntryId, ReadCallback cb, Object ctx) {
+        this(lh, startEntryId, endEntryId, cb, ctx, false);
+    }
 
+    PendingReadOp(LedgerHandle lh, long startEntryId, long endEntryId, ReadCallback cb, Object ctx, boolean recovery) {
         seq = new ArrayDeque<LedgerEntry>((int) (endEntryId - startEntryId));
         this.cb = cb;
         this.ctx = ctx;
         this.lh = lh;
         this.startEntryId = startEntryId;
         this.endEntryId = endEntryId;
+        this.recovery = recovery;
         numPendingReads = endEntryId - startEntryId + 1;
     }
 
@@ -101,7 +106,7 @@ class PendingReadOp implements Enumeration<LedgerEntry>, ReadEntryCallback {
 
         int bookieIndex = lh.distributionSchedule.getBookieIndex(entry.entryId, entry.nextReplicaIndexToReadFrom);
         entry.nextReplicaIndexToReadFrom++;
-        lh.bk.bookieClient.readEntry(ensemble.get(bookieIndex), lh.ledgerId, entry.entryId, this, entry);
+        lh.bk.bookieClient.readEntry(ensemble.get(bookieIndex), lh.ledgerId, entry.entryId, this, entry, recovery);
     }
 
     void logErrorAndReattemptRead(LedgerEntry entry, String errMsg, int rc) {

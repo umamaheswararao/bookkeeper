@@ -527,7 +527,7 @@ public class Bookie extends Thread {
         running = false;
     }
 
-    public void addEntry(ByteBuffer entry, WriteCallback cb, Object ctx, byte[] masterKey)
+    public void addEntry(ByteBuffer entry, WriteCallback cb, Object ctx, byte[] masterKey, boolean fencing, boolean recovery)
             throws IOException, BookieException {
         long ledgerId = entry.getLong();
         LedgerDescriptor handle = getHandle(ledgerId, false, masterKey);
@@ -535,6 +535,13 @@ public class Bookie extends Thread {
         if(!handle.cmpMasterKey(ByteBuffer.wrap(masterKey))) {
             throw BookieException.create(BookieException.Code.UnauthorizedAccessException);
         }
+        if (fencing) {
+            handle.setFenced();
+        }
+        if (handle.isFenced() && !recovery) {
+            throw BookieException.create(BookieException.Code.LedgerFencedException);
+        }
+        
         try {
             entry.rewind();
             long entryId = handle.addEntry(entry);
@@ -548,8 +555,11 @@ public class Bookie extends Thread {
         }
     }
 
-    public ByteBuffer readEntry(long ledgerId, long entryId) throws IOException {
+    public ByteBuffer readEntry(long ledgerId, long entryId, boolean fencing) throws IOException {
         LedgerDescriptor handle = getHandle(ledgerId, true);
+        if (fencing) {
+            handle.setFenced();
+        }
         try {
             if (LOG.isTraceEnabled()) {
                 LOG.trace("Reading " + entryId + "@" + ledgerId);
@@ -599,7 +609,7 @@ public class Bookie extends Thread {
             buff.limit(1024);
             buff.position(0);
             cb.incCount();
-            b.addEntry(buff, cb, null, new byte[0]);
+            b.addEntry(buff, cb, null, new byte[0], false, false);
         }
         cb.waitZero();
         long end = System.currentTimeMillis();
