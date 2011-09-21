@@ -111,7 +111,7 @@ public class Bookie extends Thread {
             while(running) {
                 synchronized(this) {
                     try {
-                        wait(100);
+                        wait(2000);
                         if (!entryLogger.testAndClearSomethingWritten()) {
                             continue;
                         }
@@ -312,7 +312,7 @@ public class Bookie extends Thread {
         }
     }
 
-    private LedgerDescriptor getHandle(long ledgerId, boolean readonly, byte[] masterKey) throws IOException {
+    private LedgerDescriptor getHandle(long ledgerId, boolean readonly, byte[] masterKey) throws IOException, BookieException {
         LedgerDescriptor handle = null;
         synchronized (ledgers) {
             handle = ledgers.get(ledgerId);
@@ -321,8 +321,8 @@ public class Bookie extends Thread {
                     throw new NoLedgerException(ledgerId);
                 }
                 handle = createHandle(ledgerId, readonly);
+                handle.checkAccess(readonly, masterKey);
                 ledgers.put(ledgerId, handle);
-                handle.setMasterKey(ByteBuffer.wrap(masterKey));
             }
             handle.incRef();
         }
@@ -532,9 +532,6 @@ public class Bookie extends Thread {
         long ledgerId = entry.getLong();
         LedgerDescriptor handle = getHandle(ledgerId, false, masterKey);
 
-        if(!handle.cmpMasterKey(ByteBuffer.wrap(masterKey))) {
-            throw BookieException.create(BookieException.Code.UnauthorizedAccessException);
-        }
         try {
             entry.rewind();
             long entryId = handle.addEntry(entry);

@@ -87,7 +87,7 @@ public class EntryLogger {
     GarbageCollectorThread gcThread = new GarbageCollectorThread();
     // This is how often we want to run the Garbage Collector Thread (in milliseconds).
     // This should be passed as a System property. Default it to 1000 ms (1sec).
-    final static int gcWaitTime = Integer.getInteger("gcWaitTime", 1000);
+    final static int gcWaitTime = Integer.getInteger("gcWaitTime", 120000);
 
     /**
      * Create an EntryLogger that stores it's log files in the given
@@ -141,6 +141,13 @@ public class EntryLogger {
                         continue;
                     }
                 }
+                
+                try {
+                    extractLedgersFromEntryLogs();
+                } catch (IOException e1) {
+                    LOG.warn("Problem extracting ledgers from entry", e1);
+                }
+
                 // Initialization check. No need to run any logic if we are still starting up.
                 if (bookie.zk == null || entryLogs2LedgersMap.isEmpty() || bookie.ledgerCache == null
                         || bookie.ledgerCache.activeLedgers == null) {
@@ -253,9 +260,6 @@ public class EntryLogger {
         for(File f: dirs) {
             setLastLogId(f, logId);
         }
-        // Extract all of the ledger ID's that comprise all of the entry logs
-        // (except for the current new one which is still being written to).
-        extractLedgersFromEntryLogs();
     }
 
     /**

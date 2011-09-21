@@ -38,24 +38,61 @@ class FileInfo {
 
     private FileChannel fc;
     private final File lf;
+    byte headerData[];
     /**
-     * The fingerprint of a ledger index file
+     * The fingerprint of a ledger index file. the next four bytes will be the version followed by four bytes for the length of the header structure.
      */
-    private byte header[] = "BKLE\0\0\0\0".getBytes();
+    static final public int signature = ByteBuffer.wrap("BKLE".getBytes()).getInt();
+    static final public int headerVersion = 1;
+    
     static final long START_OF_DATA = 1024;
     private long size;
     private int useCount;
     private boolean isClosed;
-    public FileInfo(File lf) throws IOException {
+    public FileInfo(File lf, byte headerData[]) {
         this.lf = lf;
-        fc = new RandomAccessFile(lf, "rws").getChannel();
-        size = fc.size();
-        if (size == 0) {
-            fc.write(ByteBuffer.wrap(header));
-        }
+        this.headerData = headerData;
     }
 
-    synchronized public long size() {
+    private void checkOpen() throws IOException {
+        if (fc != null) {
+            return;
+        }
+        if (headerData == null && !lf.exists()) {
+            throw new IOException(lf + " not found");
+        }
+        fc = new RandomAccessFile(lf, "rw").getChannel();
+        size = fc.size();
+        ByteBuffer bb = ByteBuffer.allocate(1024);
+        if (size == 0) {
+            bb.putInt(signature);
+            bb.putInt(headerVersion);
+            bb.putInt(headerData.length);
+            bb.put(headerData);
+            bb.rewind();
+            fc.write(bb);
+        } else {
+            while(bb.hasRemaining()) {
+                fc.read(bb);
+            }
+            bb.flip();
+            if (bb.getInt() != signature) {
+                throw new IOException("Missing ledger signature");
+            }
+            int version = bb.getInt();
+            if (version != headerVersion) {
+                throw new IOException("Incompatible ledger version " + version);
+            }
+            int length = bb.getInt();
+            if (length < 0 || length > bb.remaining()) {
+                throw new IOException("Length " + length + " is invalid");
+            }
+            headerData = new byte[length];
+            bb.get(headerData);
+        }
+    }
+    synchronized public long size() throws IOException {
+        checkOpen();
         long rc = size-START_OF_DATA;
         if (rc < 0) {
             rc = 0;
@@ -64,6 +101,7 @@ class FileInfo {
     }
 
     synchronized public int read(ByteBuffer bb, long position) throws IOException {
+        checkOpen();
         int total = 0;
         while(bb.remaining() > 0) {
             int rc = fc.read(bb, position+START_OF_DATA);
@@ -77,12 +115,13 @@ class FileInfo {
 
     synchronized public void close() throws IOException {
         isClosed = true;
-        if (useCount == 0) {
+        if (useCount == 0 && fc != null) {
             fc.close();
         }
     }
 
     synchronized public long write(ByteBuffer[] buffs, long position) throws IOException {
+        checkOpen();
         long total = 0;
         try {
             fc.position(position+START_OF_DATA);
@@ -94,12 +133,18 @@ class FileInfo {
                 total += rc;
             }
         } finally {
+            fc.force(true);
             long newsize = position+START_OF_DATA+total;
             if (newsize > size) {
                 size = newsize;
             }
         }
         return total;
+    }
+    
+    synchronized public byte[] getHeaderData() throws IOException {
+        checkOpen();
+        return headerData;
     }
 
     synchronized public void use() {
@@ -108,7 +153,7 @@ class FileInfo {
 
     synchronized public void release() {
         useCount--;
-        if (isClosed && useCount == 0) {
+        if (isClosed && useCount == 0 && fc != null) {
             try {
                 fc.close();
             } catch (IOException e) {
@@ -117,12 +162,8 @@ class FileInfo {
         }
     }
 
-    /**
-     * Getter to a handle on the actual ledger index file.
-     * This is used when we are deleting a ledger and want to physically remove the index file.
-     */
-    File getFile() {
-        return lf;
+    public boolean delete() {
+        return lf.delete();
     }
 
 }

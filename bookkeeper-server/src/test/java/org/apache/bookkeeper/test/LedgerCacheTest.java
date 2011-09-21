@@ -53,7 +53,7 @@ public class LedgerCacheTest extends TestCase {
 
     class TestWriteCallback implements WriteCallback {
         public void writeComplete(int rc, long ledgerId, long entryId, InetSocketAddress addr, Object ctx) {
-            LOG.info("Added entry: " + rc + ", " + ledgerId + ", " + entryId + ", " + addr);
+           // LOG.info("Added entry: " + rc + ", " + ledgerId + ", " + entryId + ", " + addr);
         }
     }
 

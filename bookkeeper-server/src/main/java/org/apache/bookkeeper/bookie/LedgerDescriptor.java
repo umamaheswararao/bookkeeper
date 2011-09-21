@@ -23,6 +23,7 @@ package org.apache.bookkeeper.bookie;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 import org.apache.log4j.Logger;
 
@@ -42,14 +43,20 @@ public class LedgerDescriptor {
         this.ledgerCache = ledgerCache;
     }
 
-    private ByteBuffer masterKey = null;
+    private byte masterKey[];
 
-    void setMasterKey(ByteBuffer masterKey) {
-        this.masterKey = masterKey;
-    }
-
-    boolean cmpMasterKey(ByteBuffer masterKey) {
-        return this.masterKey.equals(masterKey);
+    void checkAccess(boolean readOnly, byte masterKey[]) throws BookieException, IOException {
+        if (this.masterKey == null) {
+            FileInfo fi = ledgerCache.getFileInfo(ledgerId, masterKey);
+            if (fi == null) {
+                throw new IOException(ledgerId + " does not exist");
+            }
+            this.masterKey = fi.getHeaderData();
+            fi.release();
+        }
+        if (!Arrays.equals(this.masterKey, masterKey)) {
+            throw BookieException.create(BookieException.Code.UnauthorizedAccessException);
+        }
     }
 
     private long ledgerId;
@@ -93,7 +100,7 @@ public class LedgerDescriptor {
             long lastEntry = ledgerCache.getLastEntry(ledgerId);
             FileInfo fi = null;
             try {
-                fi = ledgerCache.getFileInfo(ledgerId, false);
+                fi = ledgerCache.getFileInfo(ledgerId, null);
                 long size = fi.size();
                 // we may not have the last entry in the cache
                 if (size > lastEntry*8) {
