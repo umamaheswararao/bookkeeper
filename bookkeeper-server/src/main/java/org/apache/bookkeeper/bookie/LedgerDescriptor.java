@@ -82,13 +82,15 @@ public class LedgerDescriptor {
         /*
          * Log the entry
          */
-        long pos = entryLogger.addEntry(ledgerId, entry);
+        synchronized (this) {
+            long pos = entryLogger.addEntry(ledgerId, entry);
+            
 
-
-        /*
-         * Set offset of entry id to be the current ledger position
-         */
-        ledgerCache.putEntryOffset(ledgerId, entryId, pos);
+            /*
+             * Set offset of entry id to be the current ledger position
+             */
+            ledgerCache.putEntryOffset(ledgerId, entryId, pos);
+        }
         return entryId;
     }
     ByteBuffer readEntry(long entryId) throws IOException {

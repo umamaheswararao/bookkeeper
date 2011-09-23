@@ -39,6 +39,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 
 import org.apache.bookkeeper.bookie.BookieException;
 import org.apache.bookkeeper.proto.BookieServer;
+import org.apache.bookkeeper.proto.BookieProtocol;
 import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.WriteCallback;
 import org.apache.log4j.Logger;
 import org.apache.zookeeper.CreateMode;
@@ -136,6 +137,8 @@ public class Bookie extends Thread {
         }
     }
     SyncThread syncThread = new SyncThread();
+    final int NUM_ADDERS = Integer.getInteger("numberOfBookieThreads", 100);
+    AdderThread[] adderThreads = new AdderThread[NUM_ADDERS];
 
     public Bookie(int port, String zkServers, File journalDirectory, File ledgerDirectories[]) throws IOException {
         this.journalDirectory = journalDirectory;
@@ -209,6 +212,11 @@ public class Bookie extends Thread {
         LOG.debug("I'm starting a bookie with journal directory " + journalDirectory.getName());
         start();
         syncThread.start();
+        
+        for (int i = 0; i < NUM_ADDERS; i++) {
+            adderThreads[i] = new AdderThread(adderQueue);
+            adderThreads[i].start();
+        }
         // set running here.
         // since bookie server use running as a flag to tell bookie server whether it is alive
         // if setting it in bookie thread, the watcher might run before bookie thread.
@@ -314,18 +322,24 @@ public class Bookie extends Thread {
 
     private LedgerDescriptor getHandle(long ledgerId, boolean readonly, byte[] masterKey) throws IOException, BookieException {
         LedgerDescriptor handle = null;
-        synchronized (ledgers) {
-            handle = ledgers.get(ledgerId);
-            if (handle == null) {
-                if (readonly) {
-                    throw new NoLedgerException(ledgerId);
+        
+        handle = ledgers.get(ledgerId);
+        if (handle == null) {
+            synchronized (ledgers) {
+                handle = ledgers.get(ledgerId);
+                if (handle == null) {
+                    if (readonly) {
+                        throw new NoLedgerException(ledgerId);
+                    }
+                    handle = createHandle(ledgerId, readonly);
+                    handle.checkAccess(readonly, masterKey);
+                    ledgers.put(ledgerId, handle);
+                    handle.setMasterKey(ByteBuffer.wrap(masterKey));
                 }
-                handle = createHandle(ledgerId, readonly);
-                handle.checkAccess(readonly, masterKey);
-                ledgers.put(ledgerId, handle);
             }
-            handle.incRef();
         }
+        handle.incRef();
+
         return handle;
     }
 
@@ -372,6 +386,8 @@ public class Bookie extends Thread {
     }
 
     LinkedBlockingQueue<QueueEntry> queue = new LinkedBlockingQueue<QueueEntry>();
+    LinkedBlockingQueue<Entry> adderQueue 
+        = new LinkedBlockingQueue<Entry>();
 
     public final static long preAllocSize = 4*1024*1024;
 
@@ -514,6 +530,11 @@ public class Bookie extends Thread {
         }
         // Shutdown the ZK client
         if(zk != null) zk.close();
+
+        for (AdderThread t : adderThreads) {
+            t.interrupt();
+            t.join();
+        }
         this.interrupt();
         this.join();
         syncThread.running = false;
@@ -526,23 +547,73 @@ public class Bookie extends Thread {
         // setting running to false here, so watch thread in bookie server know it only after bookie shut down
         running = false;
     }
+    
+    static class Entry {
+        public final ByteBuffer entry;
+        public final WriteCallback cb;
+        public final Object ctx;
+        public final byte[] masterKey;
+        
+        public Entry(ByteBuffer entry, WriteCallback cb, Object ctx, byte[] masterKey) {
+            /*            this.entry = ByteBuffer.allocate(entry.capacity());
+            entry.rewind();//copy from the beginning
+            this.entry.put(entry);
+            entry.rewind();
+            this.entry.flip();*/
+            this.entry = entry.duplicate();
+
+            this.cb = cb;
+            this.ctx = ctx;
+            this.masterKey = masterKey;
+        }
+    }
+
+    private class AdderThread extends Thread {
+        
+        private final LinkedBlockingQueue<Entry> aqueue;
+        public AdderThread(LinkedBlockingQueue<Entry> queue) {
+            this.aqueue = queue;
+        }
+
+        public void run() {
+            try {
+                while (true) {
+                    long entryId = 0;
+                    long ledgerId = 0;
+                    Entry e = aqueue.take();
+                    try {
+                        ledgerId = e.entry.getLong();
+                        LedgerDescriptor handle = getHandle(ledgerId, false, e.masterKey);
+                    
+                        if(!handle.cmpMasterKey(ByteBuffer.wrap(e.masterKey))) {
+                            throw BookieException.create(
+                                                         BookieException.Code.UnauthorizedAccessException);
+                        }
+                        try {
+                            e.entry.rewind();
+                            entryId = handle.addEntry(e.entry);
+                            e.entry.rewind();
+                            if (LOG.isTraceEnabled()) {
+                                LOG.trace("Adding " + entryId + "@" + ledgerId);
+                            }
+                            queue.add(new QueueEntry(e.entry, ledgerId, entryId, e.cb, e.ctx));
+                        } finally {
+                            putHandle(handle);
+                        }
+                    } catch (Exception ex) {
+                        e.cb.writeComplete(BookieProtocol.EIO, ledgerId, entryId, null, e.ctx);
+                        LOG.error("Write exception ", ex);
+                    }
+                }
+            } catch (Exception e) {
+                //LOG.info("Exception : " + e); normal shutdown
+            }
+        }
+    }
 
     public void addEntry(ByteBuffer entry, WriteCallback cb, Object ctx, byte[] masterKey)
             throws IOException, BookieException {
-        long ledgerId = entry.getLong();
-        LedgerDescriptor handle = getHandle(ledgerId, false, masterKey);
-
-        try {
-            entry.rewind();
-            long entryId = handle.addEntry(entry);
-            entry.rewind();
-            if (LOG.isTraceEnabled()) {
-                LOG.trace("Adding " + entryId + "@" + ledgerId);
-            }
-            queue.add(new QueueEntry(entry, ledgerId, entryId, cb, ctx));
-        } finally {
-            putHandle(handle);
-        }
+        adderQueue.add(new Entry(entry, cb, ctx, masterKey));
     }
 
     public ByteBuffer readEntry(long ledgerId, long entryId) throws IOException {
