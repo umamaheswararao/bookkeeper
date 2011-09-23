@@ -74,8 +74,9 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     
     int lastLedger = 0;
     private int getRandomLedger() {
-        lastLedger = (lastLedger+1)%numberOfLedgers;
-        return lastLedger;
+        return rand.nextInt(numberOfLedgers);
+        /*lastLedger = (lastLedger+1)%numberOfLedgers;
+        return lastLedger;*/
     }
     
     int sendLimit = Integer.MAX_VALUE;
@@ -155,15 +156,15 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         Context context = (Context) ctx;
         
         completions.incrementAndGet();
+        // we need to use the id passed in the context in the case of
+        // multiple ledgers, and it works even with one ledger
+        entryId = context.id;
         if((entryId % 500) == 0){ 
             long newTime = System.nanoTime() - context.localStartTime;
             totalTime += newTime; 
             ++runningAverageCounter;
         }
         
-        // we need to use the id passed in the context in the case of
-        // multiple ledgers, and it works even with one ledger
-        entryId = context.id;
         if((entryId % threshold) == (threshold - 1)){
             final long now = System.currentTimeMillis();
             long diff = now - previous;
@@ -245,6 +246,8 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         while(lastWarmUpTP < (throughput = warmUp(servers, paceInNanos, data, ledgers, ensemble, qSize, throttle))) {
             LOG.info("Warmup tp: " + throughput);
             lastWarmUpTP = throughput;
+            // we will just run once, so lets break
+            break;
         }
         
         LOG.info("Warmup phase finished");
@@ -268,8 +271,8 @@ public class TestThroughputLatency implements AddCallback, Runnable {
             throws KeeperException, IOException, InterruptedException {
         TestThroughputLatency ttl = new TestThroughputLatency(paceInNanos, ensemble, qSize, throttle, ledgers, servers);
         int limit = ledgers*3;
-        if (limit < 200000) {
-            limit = 200000;
+        if (limit < 50000) {
+            limit = 50000;
         }
         ttl.setSendLimit(limit);
         ttl.setEntryData(data);

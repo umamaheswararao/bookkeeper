@@ -25,6 +25,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -48,7 +49,7 @@ public class LedgerCache {
 
     final File ledgerDirectories[];
 
-    public LedgerCache(File ledgerDirectories[]) {
+    public LedgerCache(File ledgerDirectories[]) throws IOException {
         this.ledgerDirectories = ledgerDirectories;
         // Retrieve all of the active ledgers.
         getActiveLedgers();
@@ -166,6 +167,41 @@ public class LedgerCache {
         }
     }
 
+    static final public void formatLedgerDir(File f) throws IOException {
+        if (f.listFiles().length > 0) {
+            throw new IOException(f + " is not empty");
+        }
+        for(int g = 0; g < 256; g++) {
+            File gp = new File(f, Integer.toHexString(g));
+            gp.mkdir();
+            for(int p = 0; p < 256; p++) {
+                new File(gp, Integer.toHexString(p)).mkdir();
+            }
+        }
+    }
+
+    static final private void checkGrandParents(List<File> grandParents) throws IOException {
+        // filter out the bad names
+        for(Iterator<File> it = grandParents.iterator(); it.hasNext();) {
+            String name = it.next().getName();
+            try {
+                int i = Integer.parseInt(name, 16);
+                if (i < 0 || i > 255) {
+                    it.remove();
+                }
+            } catch(NumberFormatException e) {
+                it.remove();
+            }
+        }
+        if (grandParents.size() != 256) {
+            throw new IOException("ledger directory was not formatted");
+        }
+    }
+    
+    static final private void checkParents(List<File> parents) throws IOException {
+        // the formatting rules are the same for parents and grandparents
+        checkGrandParents(parents);
+    }
     static final private String getLedgerName(long ledgerId) {
         int parent = (int) (ledgerId & 0xff);
         int grandParent = (int) ((ledgerId & 0xff00) >> 8);
@@ -177,16 +213,6 @@ public class LedgerCache {
         sb.append(Long.toHexString(ledgerId));
         sb.append(".idx");
         return sb.toString();
-    }
-
-    static final private void checkParents(File f) throws IOException {
-        File parent = f.getParentFile();
-        if (parent.exists()) {
-            return;
-        }
-        if (parent.mkdirs() == false) {
-            throw new IOException("Counldn't mkdirs for " + parent);
-        }
     }
 
     static final private Random rand = new Random();
@@ -214,7 +240,8 @@ public class LedgerCache {
                     }
                     File dir = pickDirs(ledgerDirectories);
                     lf = new File(dir, ledgerName);
-                    checkParents(lf);
+                    // parents should be created already
+                    //checkParents(lf);
                     // A new ledger index file has been created for this Bookie.
                     // Add this new ledger to the set of active ledgers.
                     if (LOG.isDebugEnabled()) {
@@ -466,32 +493,52 @@ public class LedgerCache {
         return lastEntry;
     }
 
+    List<File> arrayToList(File a[]) {
+        ArrayList<File> list = new ArrayList<File>(a.length);
+        list.addAll(Arrays.asList(a));
+        return list;
+    }
+    
     /**
      * This method will look within the ledger directories for the ledger index
      * files. That will comprise the set of active ledgers this particular
      * BookieServer knows about that have not yet been deleted by the BookKeeper
      * Client. This is called only once during initialization.
+     * @throws IOException 
      */
-    private void getActiveLedgers() {
+    private void getActiveLedgers() throws IOException {
+        for (File ledgerDirectory : ledgerDirectories) {
+            if (ledgerDirectory.listFiles().length < 1) {
+                LOG.info(ledgerDirectory + " is empty, formatting now");
+                formatLedgerDir(ledgerDirectory);
+            }
+        }
+        
         // Ledger index files are stored in a file hierarchy with a parent and
         // grandParent directory. We'll have to go two levels deep into these
         // directories to find the index files.
         for (File ledgerDirectory : ledgerDirectories) {
-            for (File grandParent : ledgerDirectory.listFiles()) {
-                if (grandParent.isDirectory()) {
-                    for (File parent : grandParent.listFiles()) {
-                        if (parent.isDirectory()) {
-                            LOG.warn("Checking " + parent);
-                            for (File index : parent.listFiles()) {
-                                if (!index.isFile() || !index.getName().endsWith(".idx")) {
-                                    continue;
-                                }
-                                // We've found a ledger index file. The file name is the
-                                // HexString representation of the ledgerId.
-                                String ledgerIdInHex = index.getName().substring(0, index.getName().length() - 4);
-                                activeLedgers.put(Long.parseLong(ledgerIdInHex, 16), true);
-                            }
+            List<File> grandParents = arrayToList(ledgerDirectory.listFiles());
+            checkGrandParents(grandParents);
+            for (File grandParent : grandParents) {
+                if (!grandParent.isDirectory()) {
+                    throw new IOException(grandParent + " is not a directory");
+                }
+                List<File> parents = arrayToList(grandParent.listFiles());
+                checkParents(parents);
+                for (File parent : parents) {
+                    if (!parent.isDirectory()) {
+                        throw new IOException(parent + " is not a directory");
+                    }
+                    LOG.warn("Checking " + parent);
+                    for (File index : parent.listFiles()) {
+                        if (!index.isFile() || !index.getName().endsWith(".idx")) {
+                            continue;
                         }
+                        // We've found a ledger index file. The file name is the
+                        // HexString representation of the ledgerId.
+                        String ledgerIdInHex = index.getName().substring(0, index.getName().length() - 4);
+                        activeLedgers.put(Long.parseLong(ledgerIdInHex, 16), true);
                     }
                 }
             }

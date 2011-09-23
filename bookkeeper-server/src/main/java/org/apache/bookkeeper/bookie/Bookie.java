@@ -111,7 +111,7 @@ public class Bookie extends Thread {
             while(running) {
                 synchronized(this) {
                     try {
-                        wait(2000);
+                        wait(100);
                         if (!entryLogger.testAndClearSomethingWritten()) {
                             continue;
                         }
