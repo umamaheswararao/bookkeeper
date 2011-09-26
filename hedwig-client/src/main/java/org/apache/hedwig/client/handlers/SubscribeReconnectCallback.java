@@ -24,7 +24,9 @@ import org.apache.log4j.Logger;
 import org.apache.hedwig.client.api.MessageHandler;
 import org.apache.hedwig.client.conf.ClientConfiguration;
 import org.apache.hedwig.client.data.PubSubData;
+import org.apache.hedwig.client.data.TopicSubscriber;
 import org.apache.hedwig.client.netty.HedwigClient;
+import org.apache.hedwig.client.netty.HedwigChannel;
 import org.apache.hedwig.client.netty.HedwigSubscriber;
 import org.apache.hedwig.exceptions.PubSubException;
 import org.apache.hedwig.exceptions.PubSubException.ClientNotSubscribedException;
@@ -66,7 +68,10 @@ public class SubscribeReconnectCallback implements Callback<Void> {
             // Clear out all of the servers we've contacted or attempted to from
             // this request.
             origSubData.clearServersList();
-            client.doConnect(origSubData, cfg.getDefaultServerHost());
+            
+            TopicSubscriber topic = new TopicSubscriber(origSubData.topic, origSubData.subscriberId);
+            HedwigChannel channel = sub.getChannel(topic, cfg.getDefaultServerHost());
+            channel.sendMessage(origSubData);
         }
     }
 

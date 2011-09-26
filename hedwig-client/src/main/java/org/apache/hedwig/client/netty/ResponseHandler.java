@@ -35,6 +35,7 @@ import org.jboss.netty.handler.ssl.SslHandler;
 import com.google.protobuf.ByteString;
 import org.apache.hedwig.client.conf.ClientConfiguration;
 import org.apache.hedwig.client.data.PubSubData;
+import org.apache.hedwig.client.data.TopicSubscriber;
 import org.apache.hedwig.client.exceptions.ServerRedirectLoopException;
 import org.apache.hedwig.client.exceptions.TooManyServerRedirectsException;
 import org.apache.hedwig.client.handlers.PublishResponseHandler;
@@ -241,22 +242,20 @@ public class ResponseHandler extends SimpleChannelHandler {
 
         // Check if we already have a Channel open to the redirected server
         // host.
-        boolean redirectedHostChannelExists = pub.host2Channel.containsKey(redirectedHost) ? true : false;
-        if (pubSubData.operationType.equals(OperationType.SUBSCRIBE) || !redirectedHostChannelExists) {
+        if (pubSubData.operationType.equals(OperationType.SUBSCRIBE)) {
             // We don't have an existing channel to the redirected host OR this
             // is a redirected Subscribe request. For Subscribe requests, we
             // always want to create a new unique Channel connection to the
             // topic master server for the TopicSubscriber.
-            client.doConnect(pubSubData, redirectedHost);
+            TopicSubscriber topic = new TopicSubscriber(pubSubData.topic, pubSubData.subscriberId);
+            HedwigChannel c = client.getSubscriber().getChannel(topic, redirectedHost);
+            c.sendMessage(pubSubData);
         } else {
             // For Publish and Unsubscribe requests, we can just post the
             // request again directly on the existing cached redirected host
             // channel.
-            if (pubSubData.operationType.equals(OperationType.PUBLISH)) {
-                pub.doPublish(pubSubData, pub.host2Channel.get(redirectedHost));
-            } else if (pubSubData.operationType.equals(OperationType.UNSUBSCRIBE)) {
-                sub.doSubUnsub(pubSubData, pub.host2Channel.get(redirectedHost));
-            }
+            HedwigChannel c = client.getChannel(redirectedHost);
+            c.sendMessage(pubSubData);
         }
     }
 
@@ -294,12 +293,14 @@ public class ResponseHandler extends SimpleChannelHandler {
             // Due to race concurrency situations, it is possible to
             // create multiple channels to the same host for publish
             // and unsubscribe requests.
-            if (pub.host2Channel.containsKey(host) && pub.host2Channel.get(host).equals(ctx.getChannel())) {
+            if (client.host2Channel.containsKey(host) 
+                && client.host2Channel.get(host).channelMatches(ctx.getChannel())) {
                 if (logger.isDebugEnabled())
                     logger.debug("Disconnected channel for host: " + host
                                  + " was for Publish/Unsubscribe requests so remove all references to it.");
-                pub.host2Channel.remove(host);
+                HedwigChannel c = client.host2Channel.remove(host);
                 client.clearAllTopicsForHost(host);
+                c.disconnect();
             }
         } else {
             // Subscribe channel disconnected so first close and clear all
@@ -321,7 +322,10 @@ public class ResponseHandler extends SimpleChannelHandler {
             origSubData.context = null;
             if (logger.isDebugEnabled())
                 logger.debug("Disconnected subscribe channel so reconnect with origSubData: " + origSubData);
-            client.doConnect(origSubData, cfg.getDefaultServerHost());
+            
+            TopicSubscriber topic = new TopicSubscriber(origSubData.topic, origSubData.subscriberId);
+            HedwigChannel c = sub.getChannel(topic, cfg.getDefaultServerHost());
+            c.sendMessage(origSubData);
         }
 
         // Finally, all of the PubSubRequests that are still waiting for an ack

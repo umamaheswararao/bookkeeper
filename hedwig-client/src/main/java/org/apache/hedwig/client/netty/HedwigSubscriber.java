@@ -64,7 +64,8 @@ public class HedwigSubscriber implements Subscriber {
     // TopicSubscriber, we want a unique Channel connection to the server for
     // it. We can also get the ResponseHandler tied to the Channel via the
     // Channel Pipeline.
-    protected final ConcurrentMap<TopicSubscriber, Channel> topicSubscriber2Channel = new ConcurrentHashMap<TopicSubscriber, Channel>();
+    protected final ConcurrentMap<TopicSubscriber, HedwigChannel> topicSubscriber2Channel 
+        = new ConcurrentHashMap<TopicSubscriber, HedwigChannel>();
 
     protected final HedwigClient client;
     protected final ClientConfiguration cfg;
@@ -141,33 +142,32 @@ public class HedwigSubscriber implements Subscriber {
         // subscribing to.
         PubSubData pubSubData = new PubSubData(topic, null, subscriberId, operationType, createOrAttach, callback,
                                                context);
+        InetSocketAddress host = cfg.getDefaultServerHost();
         if (client.topic2Host.containsKey(topic)) {
-            InetSocketAddress host = client.topic2Host.get(topic);
-            if (operationType.equals(OperationType.UNSUBSCRIBE) && client.getPublisher().host2Channel.containsKey(host)) {
-                // For unsubscribes, we can reuse the channel connections to the
-                // server host that are cached for publishes. For publish and
-                // unsubscribe flows, we will thus use the same Channels and
-                // will cache and store them during the ConnectCallback.
-                doSubUnsub(pubSubData, client.getPublisher().host2Channel.get(host));
-            } else {
-                // We know which server host is the master for the topic so
-                // connect to that first. For subscribes, we want a new channel
-                // connection each time for the TopicSubscriber. If the
-                // TopicSubscriber is already connected and subscribed,
-                // we assume the server will respond with an appropriate status
-                // indicating this. For unsubscribes, it is possible that the
-                // client is subscribed to the topic already but does not
-                // have a Channel connection yet to the server host. e.g. Client
-                // goes down and comes back up but client side soft state memory
-                // does not have the netty Channel connection anymore.
-                client.doConnect(pubSubData, host);
-            }
+            host = client.topic2Host.get(topic);
+        }
+        
+        if (operationType.equals(OperationType.UNSUBSCRIBE)) {
+            // For unsubscribes, we can reuse the channel connections to the
+            // server host that are cached for publishes. For publish and
+            // unsubscribe flows, we will thus use the same Channels and
+            // will cache and store them during the ConnectCallback.
+            HedwigChannel channel = client.getChannel(host);
+            channel.sendMessage(pubSubData);
         } else {
-            // Server host for the given topic is not known yet so use the
-            // default server host/port as defined in the configs. This should
-            // point to the server VIP which would redirect to a random server
-            // (which might not be the server hosting the topic).
-            client.doConnect(pubSubData, cfg.getDefaultServerHost());
+            // We know which server host is the master for the topic so
+            // connect to that first. For subscribes, we want a new channel
+            // connection each time for the TopicSubscriber. If the
+            // TopicSubscriber is already connected and subscribed,
+            // we assume the server will respond with an appropriate status
+            // indicating this. For unsubscribes, it is possible that the
+            // client is subscribed to the topic already but does not
+            // have a Channel connection yet to the server host. e.g. Client
+            // goes down and comes back up but client side soft state memory
+            // does not have the netty Channel connection anymore.
+            TopicSubscriber topicSub = new TopicSubscriber(topic, subscriberId);
+            HedwigChannel channel = getChannel(topicSub, host);
+            channel.sendMessage(pubSubData);
         }
     }
 
@@ -299,7 +299,8 @@ public class HedwigSubscriber implements Subscriber {
         PubSubData pubSubData = new PubSubData(topic, null, subscriberId, OperationType.CONSUME, null, null, null);
         // Send the consume message to the server using the same subscribe
         // channel that the topic subscription uses.
-        doConsume(pubSubData, topicSubscriber2Channel.get(topicSubscriber), messageSeqId);
+        HedwigChannel channel = topicSubscriber2Channel.get(topicSubscriber);
+        doConsume(pubSubData, channel.getChannel(), messageSeqId);
     }
 
     /**
@@ -458,14 +459,19 @@ public class HedwigSubscriber implements Subscriber {
 
         // Register the MessageHandler with the subscribe Channel's
         // Response Handler.
-        Channel topicSubscriberChannel = topicSubscriber2Channel.get(topicSubscriber);
-        HedwigClient.getResponseHandlerFromChannel(topicSubscriberChannel).getSubscribeResponseHandler()
+        HedwigChannel topicSubscriberChannel = topicSubscriber2Channel.get(topicSubscriber);
+        Channel channel = topicSubscriberChannel.getChannel();
+        if (channel == null) {
+            throw new ClientNotSubscribedException("Client has not connected yet to topic: " + topic.toStringUtf8()
+                                                   + ", subscriberId: " + subscriberId.toStringUtf8());
+        }
+        HedwigClient.getResponseHandlerFromChannel(channel).getSubscribeResponseHandler()
         .setMessageHandler(messageHandler);
         // Now make the TopicSubscriber Channel readable (it is set to not be
         // readable when the initial subscription is done). Note that this is an
         // asynchronous call. If this fails (not likely), the futureListener
         // will just log an error message for now.
-        ChannelFuture future = topicSubscriberChannel.setReadable(true);
+        ChannelFuture future = channel.setReadable(true);
         future.addListener(new ChannelFutureListener() {
             @Override
             public void operationComplete(ChannelFuture future) throws Exception {
@@ -495,14 +501,20 @@ public class HedwigSubscriber implements Subscriber {
 
         // Unregister the MessageHandler for the subscribe Channel's
         // Response Handler.
-        Channel topicSubscriberChannel = topicSubscriber2Channel.get(topicSubscriber);
-        HedwigClient.getResponseHandlerFromChannel(topicSubscriberChannel).getSubscribeResponseHandler()
+        HedwigChannel topicSubscriberChannel = topicSubscriber2Channel.get(topicSubscriber);
+        Channel channel = topicSubscriberChannel.getChannel();
+        if (channel == null) {
+            throw new ClientNotSubscribedException("Client has not connected yet to topic: " + topic.toStringUtf8()
+                                                   + ", subscriberId: " + subscriberId.toStringUtf8());
+        } 
+        
+        HedwigClient.getResponseHandlerFromChannel(channel).getSubscribeResponseHandler()
         .setMessageHandler(null);
         // Now make the TopicSubscriber channel not-readable. This will buffer
         // up messages if any are sent from the server. Note that this is an
         // asynchronous call. If this fails (not likely), the futureListener
         // will just log an error message for now.
-        ChannelFuture future = topicSubscriberChannel.setReadable(false);
+        ChannelFuture future = channel.setReadable(false);
         future.addListener(new ChannelFutureListener() {
             @Override
             public void operationComplete(ChannelFuture future) throws Exception {
@@ -539,10 +551,20 @@ public class HedwigSubscriber implements Subscriber {
             logger.debug("Closing subscription asynchronously for topic: " + topic.toStringUtf8() + ", subscriberId: "
                          + subscriberId.toStringUtf8());
         TopicSubscriber topicSubscriber = new TopicSubscriber(topic, subscriberId);
+        
+        logger.info("IKTODO there are this many subs " + topicSubscriber2Channel.size());
         if (topicSubscriber2Channel.containsKey(topicSubscriber)) {
             // Remove all cached references for the TopicSubscriber
-            Channel channel = topicSubscriber2Channel.get(topicSubscriber);
+            HedwigChannel topicSubscriberChannel = topicSubscriber2Channel.get(topicSubscriber);
             topicSubscriber2Channel.remove(topicSubscriber);
+
+            Channel channel = topicSubscriberChannel.getChannel();
+            if (channel == null) {
+                // IKTODO, what happens if connect in progress
+                callback.operationFinished(context, null);
+                return;
+            }
+
             // Close the subscribe channel asynchronously.
             HedwigClient.getResponseHandlerFromChannel(channel).channelClosedExplicitly = true;
             ChannelFuture future = channel.close();
@@ -570,16 +592,30 @@ public class HedwigSubscriber implements Subscriber {
     // Public getter and setters for entries in the topic2Host Map.
     // This is used for classes that need this information but are not in the
     // same classpath.
-    public Channel getChannelForTopic(TopicSubscriber topic) {
+    public HedwigChannel getChannel(TopicSubscriber topic, InetSocketAddress host) {
+        HedwigChannel channel = new HedwigChannel(client, host);
+        HedwigChannel oldchannel = topicSubscriber2Channel.putIfAbsent(topic, channel);        
+        if (oldchannel != null) {
+            if (oldchannel.getHost().equals(host)) {
+                channel = oldchannel;
+            } else {
+                synchronized(this) {
+                    oldchannel = topicSubscriber2Channel.putIfAbsent(topic, channel);        
+                    if (oldchannel != null && oldchannel.getHost().equals(host)) {
+                        channel = oldchannel;
+                    } else {
+                        topicSubscriber2Channel.remove(topic);
+                        oldchannel.close();
+                        topicSubscriber2Channel.put(topic, channel);
+                    }
+                }
+            }
+        }
+        channel.connect();
+        return channel;
+    }
+
+    public HedwigChannel getChannelForTopic(TopicSubscriber topic) {
         return topicSubscriber2Channel.get(topic);
     }
-
-    public void setChannelForTopic(TopicSubscriber topic, Channel channel) {
-        topicSubscriber2Channel.put(topic, channel);
-    }
-
-    public void removeChannelForTopic(TopicSubscriber topic) {
-        topicSubscriber2Channel.remove(topic);
-    }
-
 }

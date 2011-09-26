@@ -48,12 +48,6 @@ public class HedwigPublisher implements Publisher {
 
     private static Logger logger = Logger.getLogger(HedwigPublisher.class);
 
-    // Concurrent Map to store the mappings for a given Host (Hostname:Port) to
-    // the Channel that has been established for it previously. This channel
-    // will be used whenever we publish on a topic that the server is the master
-    // of currently. The channels used here will only be used for publish and
-    // unsubscribe requests.
-    protected final ConcurrentMap<InetSocketAddress, Channel> host2Channel = new ConcurrentHashMap<InetSocketAddress, Channel>();
 
     private final HedwigClient client;
     private final ClientConfiguration cfg;
@@ -112,31 +106,16 @@ public class HedwigPublisher implements Publisher {
         PubSubData pubSubData = new PubSubData(topic, msg, null, OperationType.PUBLISH, null, callback, context);
         if (client.topic2Host.containsKey(topic)) {
             InetSocketAddress host = client.topic2Host.get(topic);
-            if (host2Channel.containsKey(host)) {
-                // We already have the Channel connection for the server host so
-                // do the publish directly. We will deal with redirect logic
-                // later on if that server is no longer the current host for
-                // the topic.
-                doPublish(pubSubData, host2Channel.get(host));
-            } else {
-                // We have a mapping for the topic to host but don't have a
-                // Channel for that server. This can happen if the Channel
-                // is disconnected for some reason. Do the connect then to
-                // the specified server host to create a new Channel connection.
-                client.doConnect(pubSubData, host);
-            }
+            HedwigChannel channel = client.getChannel(host);
+            channel.sendMessage(pubSubData);
         } else {
             // Server host for the given topic is not known yet so use the
             // default server host/port as defined in the configs. This should
             // point to the server VIP which would redirect to a random server
             // (which might not be the server hosting the topic).
             InetSocketAddress host = cfg.getDefaultServerHost();
-            if (host2Channel.containsKey(host)) {
-                // if there is a channel to default server, use it!
-                doPublish(pubSubData, host2Channel.get(host));
-                return;
-            }
-            client.doConnect(pubSubData, host);
+            HedwigChannel channel = client.getChannel(host);
+            channel.sendMessage(pubSubData);
         }
     }
 
@@ -187,44 +166,4 @@ public class HedwigPublisher implements Publisher {
         ChannelFuture future = channel.write(pubsubRequestBuilder.build());
         future.addListener(new WriteCallback(pubSubData, client));
     }
-
-    // Synchronized method to store the host2Channel mapping (if it doesn't
-    // exist yet). Retrieve the hostname info from the Channel created via the
-    // RemoteAddress tied to it.
-    protected synchronized void storeHost2ChannelMapping(Channel channel) {
-        InetSocketAddress host = HedwigClient.getHostFromChannel(channel);
-        if (!host2Channel.containsKey(host)) {
-            if (logger.isDebugEnabled())
-                logger.debug("Storing a new Channel mapping for host: " + host);
-            host2Channel.put(host, channel);
-        } else {
-            // If we've reached here, that means we already have a Channel
-            // mapping for the given host. This should ideally not happen
-            // and it means we are creating another Channel to a server host
-            // to publish on when we could have used an existing one. This could
-            // happen due to a race condition if initially multiple concurrent
-            // threads are publishing on the same topic and no Channel exists
-            // currently to the server. We are not synchronizing this initial
-            // creation of Channels to a given host for performance.
-            // Another possible way to have redundant Channels created is if
-            // a new topic is being published to, we connect to the default
-            // server host which should be a VIP that redirects to a "real"
-            // server host. Since we don't know beforehand what is the full
-            // set of server hosts, we could be redirected to a server that
-            // we already have a channel connection to from a prior existing
-            // topic. Close these redundant channels as they won't be used.
-            if (logger.isDebugEnabled())
-                logger.debug("Channel mapping to host: " + host + " already exists so no need to store it.");
-            HedwigClient.getResponseHandlerFromChannel(channel).channelClosedExplicitly = true;
-            channel.close();
-        }
-    }
-
-    // Public getter for entries in the host2Channel Map.
-    // This is used for classes that need this information but are not in the
-    // same classpath.
-    public Channel getChannelForHost(InetSocketAddress host) {
-        return host2Channel.get(host);
-    }
-
 }

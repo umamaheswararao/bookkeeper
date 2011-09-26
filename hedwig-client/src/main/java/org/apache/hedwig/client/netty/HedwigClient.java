@@ -73,6 +73,14 @@ public class HedwigClient {
     protected final ConcurrentMap<ByteString, InetSocketAddress> topic2Host = new ConcurrentHashMap<ByteString, InetSocketAddress>();
     private final ConcurrentMap<InetSocketAddress, List<ByteString>> host2Topics = new ConcurrentHashMap<InetSocketAddress, List<ByteString>>();
 
+    // Concurrent Map to store the mappings for a given Host (Hostname:Port) to
+    // the Channel that has been established for it previously. This channel
+    // will be used whenever we publish on a topic that the server is the master
+    // of currently. The channels used here will only be used for publish and
+    // unsubscribe requests.
+    protected final ConcurrentMap<InetSocketAddress, HedwigChannel> host2Channel 
+        = new ConcurrentHashMap<InetSocketAddress, HedwigChannel>();
+
     // Each client instantiation will have a Timer for running recurring
     // threads. One such timer task thread to is to timeout long running
     // PubSubRequests that are waiting for an ack response from the server.
@@ -164,7 +172,11 @@ public class HedwigClient {
             // First check the ResponseHandlers associated with cached
             // channels in HedwigPublisher.host2Channel. This stores the
             // channels used for Publish and Unsubscribe requests.
-            for (Channel channel : pub.host2Channel.values()) {
+            for (HedwigChannel h : host2Channel.values()) {
+                Channel channel = h.getChannel();
+                if (channel == null) {
+                    continue;
+                }
                 ResponseHandler responseHandler = getResponseHandlerFromChannel(channel);
                 for (PubSubData pubSubData : responseHandler.txn2PubSubData.values()) {
                     checkPubSubDataToTimeOut(pubSubData, responseHandler, curTime, timeoutInterval);
@@ -173,7 +185,12 @@ public class HedwigClient {
             // Now do the same for the cached channels in
             // HedwigSubscriber.topicSubscriber2Channel. This stores the
             // channels used exclusively for Subscribe requests.
-            for (Channel channel : sub.topicSubscriber2Channel.values()) {
+            for (HedwigChannel h : sub.topicSubscriber2Channel.values()) {
+                Channel channel = h.getChannel();
+                if (channel == null) {
+                    continue;
+                }
+
                 ResponseHandler responseHandler = getResponseHandlerFromChannel(channel);
                 for (PubSubData pubSubData : responseHandler.txn2PubSubData.values()) {
                     checkPubSubDataToTimeOut(pubSubData, responseHandler, curTime, timeoutInterval);
@@ -205,18 +222,16 @@ public class HedwigClient {
         // Stop the timer and all timer task threads.
         clientTimer.cancel();
         // Close all of the open Channels.
-        for (Channel channel : pub.host2Channel.values()) {
-            getResponseHandlerFromChannel(channel).channelClosedExplicitly = true;
-            channel.close().awaitUninterruptibly();
+        for (HedwigChannel h : host2Channel.values()) {
+            h.close();
         }
-        for (Channel channel : sub.topicSubscriber2Channel.values()) {
-            getResponseHandlerFromChannel(channel).channelClosedExplicitly = true;
-            channel.close().awaitUninterruptibly();
+        for (HedwigChannel h : sub.topicSubscriber2Channel.values()) {
+            h.close();
         }
         // Clear out all Maps.
         topic2Host.clear();
         host2Topics.clear();
-        pub.host2Channel.clear();
+        host2Channel.clear();
         sub.topicSubscriber2Channel.clear();
         // Release resources used by the ChannelFactory on the client if we are
         // the owner that created it.
@@ -242,19 +257,18 @@ public class HedwigClient {
      * @param serverHost
      *            Input server host to connect to of type InetSocketAddress
      */
-    public void doConnect(PubSubData pubSubData, InetSocketAddress serverHost) {
-        if (logger.isDebugEnabled())
-            logger.debug("Connecting to host: " + serverHost + " with pubSubData: " + pubSubData);
-        // Set up the ClientBootStrap so we can create a new Channel connection
-        // to the server.
-        ClientBootstrap bootstrap = new ClientBootstrap(socketFactory);
-        bootstrap.setPipelineFactory(pipelineFactory);
-        bootstrap.setOption("tcpNoDelay", true);
-        bootstrap.setOption("keepAlive", true);
+    /*    public void doConnect(PubSubData pubSubData, InetSocketAddress serverHost) {
+        // FIXME
+        }*/
 
-        // Start the connection attempt to the input server host.
-        ChannelFuture future = bootstrap.connect(serverHost);
-        future.addListener(new ConnectCallback(pubSubData, serverHost, this));
+    public HedwigChannel getChannel(InetSocketAddress host) {
+        HedwigChannel channel = new HedwigChannel(this, host);
+        HedwigChannel oldchannel = host2Channel.putIfAbsent(host, channel);
+        if (oldchannel != null) {
+            channel = oldchannel;
+        } 
+        channel.connect();
+        return channel;
     }
 
     /**
@@ -356,4 +370,11 @@ public class HedwigClient {
         return clientTimer;
     }
 
+    ChannelFactory getSocketFactory() {
+        return socketFactory;
+    }
+
+    ClientChannelPipelineFactory getPipelineFactory() {
+        return pipelineFactory;
+    }
 }

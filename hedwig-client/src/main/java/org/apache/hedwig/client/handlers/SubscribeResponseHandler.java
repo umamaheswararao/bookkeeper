@@ -105,12 +105,7 @@ public class SubscribeResponseHandler {
             // Store the original PubSubData used to create this successful
             // Subscribe request.
             origSubData = pubSubData;
-            // Store the mapping for the TopicSubscriber to the Channel.
-            // This is so we can control the starting and stopping of
-            // message deliveries from the server on that Channel. Store
-            // this only on a successful ack response from the server.
-            TopicSubscriber topicSubscriber = new TopicSubscriber(pubSubData.topic, pubSubData.subscriberId);
-            responseHandler.getSubscriber().setChannelForTopic(topicSubscriber, channel);
+
             // Lazily create the Set to keep track of outstanding Messages
             // to be consumed by the client app. At this stage, delivery for
             // that topic hasn't started yet so creation of this Set should

@@ -23,10 +23,12 @@ import java.util.LinkedList;
 import org.apache.log4j.Logger;
 import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
-
+import org.apache.hedwig.protocol.PubSubProtocol.OperationType;
 import com.google.protobuf.ByteString;
 import org.apache.hedwig.client.conf.ClientConfiguration;
+import org.apache.hedwig.client.netty.HedwigChannel;
 import org.apache.hedwig.client.data.PubSubData;
+import org.apache.hedwig.client.data.TopicSubscriber;
 import org.apache.hedwig.exceptions.PubSubException.ServiceDownException;
 import org.apache.hedwig.util.HedwigSocketAddress;
 
@@ -83,7 +85,15 @@ public class WriteCallback implements ChannelFutureListener {
                 if (pubSubData.writeFailedServers == null)
                     pubSubData.writeFailedServers = new LinkedList<ByteString>();
                 pubSubData.writeFailedServers.add(hostString);
-                client.doConnect(pubSubData, cfg.getDefaultServerHost());
+
+                if (pubSubData.operationType.equals(OperationType.SUBSCRIBE)) {
+                    TopicSubscriber topic = new TopicSubscriber(pubSubData.topic, pubSubData.subscriberId);
+                    HedwigChannel c = client.getSubscriber().getChannel(topic, cfg.getDefaultServerHost());
+                    c.sendMessage(pubSubData);
+                } else {
+                    HedwigChannel c = client.getChannel(cfg.getDefaultServerHost());
+                    c.sendMessage(pubSubData);
+                }
             }
         } else {
             // Now that the write to the server is done, we have to wait for it
