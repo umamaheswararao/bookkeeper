@@ -74,9 +74,9 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     
     int lastLedger = 0;
     private int getRandomLedger() {
-        return rand.nextInt(numberOfLedgers);
-        /*lastLedger = (lastLedger+1)%numberOfLedgers;
-        return lastLedger;*/
+        // return rand.nextInt(numberOfLedgers);
+        lastLedger = (lastLedger+1)%numberOfLedgers;
+        return lastLedger;
     }
     
     int sendLimit = Integer.MAX_VALUE;
