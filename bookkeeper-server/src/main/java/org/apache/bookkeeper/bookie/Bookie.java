@@ -334,7 +334,6 @@ public class Bookie extends Thread {
                     handle = createHandle(ledgerId, readonly);
                     handle.checkAccess(readonly, masterKey);
                     ledgers.put(ledgerId, handle);
-                    handle.setMasterKey(ByteBuffer.wrap(masterKey));
                 }
             }
         }
@@ -585,10 +584,6 @@ public class Bookie extends Thread {
                         ledgerId = e.entry.getLong();
                         LedgerDescriptor handle = getHandle(ledgerId, false, e.masterKey);
                     
-                        if(!handle.cmpMasterKey(ByteBuffer.wrap(e.masterKey))) {
-                            throw BookieException.create(
-                                                         BookieException.Code.UnauthorizedAccessException);
-                        }
                         try {
                             e.entry.rewind();
                             entryId = handle.addEntry(e.entry);
