@@ -113,7 +113,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         // to the bookie.
         ClientBootstrap bootstrap = new ClientBootstrap(channelFactory);
         bootstrap.setPipelineFactory(this);
-        bootstrap.setOption("tcpNoDelay", true);
+        bootstrap.setOption("tcpNoDelay", System.getProperty("client.tcpnodelay", "false").toLowerCase().equals("true"));
         bootstrap.setOption("keepAlive", true);
 
         ChannelFuture future = bootstrap.connect(addr);
