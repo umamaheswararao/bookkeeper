@@ -472,7 +472,6 @@ public class EntryLogger {
                 pos += entrySize;
                 sizeBuff.clear();
             }
-            LOG.info("Retrieved all ledgers that comprise entryLogId: " + entryLogId + ", values: " + entryLogLedgers);
             entryLogs2LedgersMap.put(entryLogId, entryLogLedgers);
         }
     }

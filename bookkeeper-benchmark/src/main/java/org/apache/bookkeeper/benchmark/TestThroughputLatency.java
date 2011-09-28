@@ -242,6 +242,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         int qSize = Integer.parseInt(args[3]);
         int throttle = Integer.parseInt(args[4]);
         Thread thread;
+        /*
         long lastWarmUpTP = -1;
         long throughput;
         LOG.info("Starting warmup");
@@ -251,6 +252,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
             // we will just run once, so lets break
             break;
         }
+        */
         
         LOG.info("Warmup phase finished");
         
