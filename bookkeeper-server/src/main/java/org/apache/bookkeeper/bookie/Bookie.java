@@ -107,10 +107,15 @@ public class Bookie extends Thread {
         }
         @Override
         public void run() {
+            long start = System.nanoTime();
             while(running) {
+                long now = System.nanoTime();
                 synchronized(this) {
                     try {
-                        wait(100);
+                        long delay = 100 - (now-start);
+                        if (delay > 0) {
+                            wait(100 - (now-start));
+                        }
                         if (!entryLogger.testAndClearSomethingWritten()) {
                             continue;
                         }
@@ -131,6 +136,12 @@ public class Bookie extends Thread {
                     LOG.error("Exception flushing entry logger", e);
                 }
                 lastLogMark.rollLog();
+                try {
+                    ledgerCache.checkOpenFileLimit();
+                } catch (IOException e) {
+                    LOG.warn("Problem checking open files", e);
+                }
+                start = now;
             }
         }
     }

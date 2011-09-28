@@ -170,6 +170,10 @@ class FileInfo {
         }
     }
 
+    synchronized public boolean inUse() {
+        return useCount > 0;
+    }
+    
     public boolean delete() {
         return lf.delete();
     }
