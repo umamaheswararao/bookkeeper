@@ -9,6 +9,7 @@ import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.AsyncCallback.AddCallback;
+import org.apache.bookkeeper.util.MainUtil;
 import org.apache.log4j.Logger;
 import org.apache.zookeeper.KeeperException;
 
@@ -212,6 +213,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
             servers_sb.append(args[i] + " ");
         }
     
+        MainUtil.outputInitInfo();
         long runningTime = Long.parseLong(args[0]);
         String servers = servers_sb.toString().trim().replace(' ', ',');
         LOG.warn("(Parameters received) running time: " + args[0] + 

@@ -29,6 +29,7 @@ import java.nio.ByteBuffer;
 import org.apache.bookkeeper.bookie.Bookie;
 import org.apache.bookkeeper.bookie.BookieException;
 import org.apache.bookkeeper.proto.NIOServerFactory.Cnxn;
+import org.apache.bookkeeper.util.MainUtil;
 import org.apache.log4j.Logger;
 
 /**
@@ -125,6 +126,7 @@ public class BookieServer implements NIOServerFactory.PacketProcessor, Bookkeepe
             System.err.println("USAGE: BookieServer port zkServers journalDirectory ledgerDirectory [ledgerDirectory]*");
             return;
         }
+        MainUtil.outputInitInfo();
         int port = Integer.parseInt(args[0]);
         String zkServers = args[1];
         File journalDirectory = new File(args[2]);
