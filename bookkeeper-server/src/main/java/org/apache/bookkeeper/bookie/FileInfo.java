@@ -54,24 +54,32 @@ class FileInfo {
         this.headerData = headerData;
     }
 
-    private void checkOpen() throws IOException {
+    private void checkOpen(boolean create) throws IOException {
         if (fc != null) {
             return;
         }
-        if (headerData == null && !lf.exists()) {
+        boolean exists = lf.exists();
+        if (headerData == null && !exists) {
             throw new IOException(lf + " not found");
         }
-        fc = new RandomAccessFile(lf, "rw").getChannel();
-        size = fc.size();
         ByteBuffer bb = ByteBuffer.allocate(1024);
-        if (size == 0) {
-            bb.putInt(signature);
-            bb.putInt(headerVersion);
-            bb.putInt(headerData.length);
-            bb.put(headerData);
-            bb.rewind();
-            fc.write(bb);
+        if (!exists) { 
+            if (create) {
+                fc = new RandomAccessFile(lf, "rw").getChannel();
+                size = fc.size();
+                if (size == 0) {
+                    bb.putInt(signature);
+                    bb.putInt(headerVersion);
+                    bb.putInt(headerData.length);
+                    bb.put(headerData);
+                    bb.rewind();
+                    fc.write(bb);
+                }
+            }
         } else {
+            fc = new RandomAccessFile(lf, "rw").getChannel();
+            size = fc.size();
+
             while(bb.hasRemaining()) {
                 fc.read(bb);
             }
@@ -92,16 +100,16 @@ class FileInfo {
         }
     }
     synchronized public long size() throws IOException {
-        checkOpen();
+        checkOpen(false);
         long rc = size-START_OF_DATA;
         if (rc < 0) {
             rc = 0;
         }
         return rc;
     }
-
+    
     synchronized public int read(ByteBuffer bb, long position) throws IOException {
-        checkOpen();
+        checkOpen(false);
         int total = 0;
         while(bb.remaining() > 0) {
             int rc = fc.read(bb, position+START_OF_DATA);
@@ -121,7 +129,7 @@ class FileInfo {
     }
 
     synchronized public long write(ByteBuffer[] buffs, long position) throws IOException {
-        checkOpen();
+        checkOpen(true);
         long total = 0;
         try {
             fc.position(position+START_OF_DATA);
@@ -133,7 +141,7 @@ class FileInfo {
                 total += rc;
             }
         } finally {
-            fc.force(true);
+	    fc.force(true);
             long newsize = position+START_OF_DATA+total;
             if (newsize > size) {
                 size = newsize;
@@ -143,7 +151,7 @@ class FileInfo {
     }
     
     synchronized public byte[] getHeaderData() throws IOException {
-        checkOpen();
+        checkOpen(false);
         return headerData;
     }
 
