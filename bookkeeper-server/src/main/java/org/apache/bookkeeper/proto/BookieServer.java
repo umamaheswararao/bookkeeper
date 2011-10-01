@@ -28,6 +28,7 @@ import java.nio.ByteBuffer;
 
 import org.apache.bookkeeper.bookie.Bookie;
 import org.apache.bookkeeper.bookie.BookieException;
+import org.apache.bookkeeper.bookie.EntryLogger;
 import org.apache.bookkeeper.proto.NIOServerFactory.Cnxn;
 import org.apache.bookkeeper.util.MainUtil;
 import org.apache.log4j.Logger;
@@ -40,7 +41,10 @@ public class BookieServer implements NIOServerFactory.PacketProcessor, Bookkeepe
     int port;
     NIOServerFactory nioServerFactory;
     private volatile boolean running = false;
-    Bookie bookie;
+    private Bookie bookie;
+    public Bookie getBookie() {
+        return bookie;
+    }
     DeathWatcher deathWatcher;
     static Logger LOG = Logger.getLogger(BookieServer.class);
 
@@ -256,5 +260,4 @@ public class BookieServer implements NIOServerFactory.PacketProcessor, Bookkeepe
         }
         src.sendResponse(new ByteBuffer[] { bb });
     }
-
 }

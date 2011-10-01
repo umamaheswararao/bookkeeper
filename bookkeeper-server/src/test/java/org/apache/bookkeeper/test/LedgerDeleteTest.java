@@ -47,7 +47,7 @@ public class LedgerDeleteTest extends BaseTestCase {
     @Override
     public void setUp() throws Exception {
         // Set up the configuration properties needed.
-        System.setProperty("logSizeLimit", Long.toString(2 * 1024 * 1024L));
+        System.setProperty("logSizeLimit", Long.toString(2 * 100 * 1024L));
         System.setProperty("gcWaitTime", "1000");
         super.setUp();
     }
@@ -91,14 +91,15 @@ public class LedgerDeleteTest extends BaseTestCase {
     @Test
     public void testLedgerDelete() throws Exception {
         // Write enough ledger entries so that we roll over the initial entryLog (0.log)
-        LedgerHandle[] lhs = writeLedgerEntries(3, 1024, 1024);
+        LedgerHandle[] lhs = writeLedgerEntries(3, 1024, 220);
 
         // Delete all of these ledgers from the BookKeeper client
         for (LedgerHandle lh : lhs) {
             bkc.deleteLedger(lh.getId());
         }
+        
         LOG.info("Finished deleting all ledgers so waiting for the GC thread to clean up the entryLogs");
-        Thread.sleep(2000);
+        wakeUpEntryLoggerGc();
 
         // Verify that the first entry log (0.log) has been deleted from all of the Bookie Servers.
         for (File ledgerDirectory : tmpDirs) {
@@ -120,7 +121,7 @@ public class LedgerDeleteTest extends BaseTestCase {
     @Test
     public void testLedgerDeleteWithExistingEntryLogs() throws Exception {
         // Write enough ledger entries so that we roll over the initial entryLog (0.log)
-        LedgerHandle[] lhs = writeLedgerEntries(3, 1024, 1024);
+        LedgerHandle[] lhs = writeLedgerEntries(3, 1024, 220);
 
         /*
          * Shutdown the Bookie Servers and restart them using the same ledger
@@ -144,7 +145,7 @@ public class LedgerDeleteTest extends BaseTestCase {
             bkc.deleteLedger(lh.getId());
         }
         LOG.info("Finished deleting all ledgers so waiting for the GC thread to clean up the entryLogs");
-        Thread.sleep(2000);
+        wakeUpEntryLoggerGc();
 
         /*
          * Verify that the first two entry logs ([0,1].log) have been deleted

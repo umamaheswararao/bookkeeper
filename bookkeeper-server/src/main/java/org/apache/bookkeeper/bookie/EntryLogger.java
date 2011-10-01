@@ -39,6 +39,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.log4j.Logger;
 import org.apache.zookeeper.AsyncCallback;
@@ -63,7 +66,7 @@ public class EntryLogger {
     /**
      * The maximum size of a entry logger file.
      */
-    final static long LOG_SIZE_LIMIT = Long.getLong("logSizeLimit", 2 * 1024 * 1024 * 1024L);
+    final long LOG_SIZE_LIMIT = Long.getLong("logSizeLimit", 2 * 1024 * 1024 * 1024L);
     private volatile BufferedChannel logChannel;
     /**
      * The 1K block at the head of the entry logger file
@@ -84,11 +87,13 @@ public class EntryLogger {
     private ConcurrentMap<Long, ConcurrentHashMap<Long, Boolean>> entryLogs2LedgersMap = new ConcurrentHashMap<Long, ConcurrentHashMap<Long, Boolean>>();
     // This is the thread that garbage collects the entry logs that do not
     // contain any active ledgers in them.
-    GarbageCollectorThread gcThread = new GarbageCollectorThread();
+    GarbageCollectorTask gcTask = new GarbageCollectorTask();
     // This is how often we want to run the Garbage Collector Thread (in milliseconds).
     // This should be passed as a System property. Default it to 1000 ms (1sec).
-    final static int gcWaitTime = Integer.getInteger("gcWaitTime", 120000);
-
+    private final static int gcWaitTime = Integer.getInteger("gcWaitTime", 120000);
+    
+    ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
+    
     /**
      * Create an EntryLogger that stores it's log files in the given
      * directories
@@ -111,7 +116,7 @@ public class EntryLogger {
         }
         createLogId(logId);
         // Start the Garbage Collector thread to prune unneeded entry logs.
-        gcThread.start();
+        scheduler.scheduleAtFixedRate(gcTask, gcWaitTime, gcWaitTime, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -123,124 +128,141 @@ public class EntryLogger {
      * This is the garbage collector thread that runs in the background to
      * remove any entry log files that no longer contains any active ledger.
      */
-    class GarbageCollectorThread extends Thread {
-        volatile boolean running = true;
-
-        public GarbageCollectorThread() {
-            super("GarbageCollectorThread");
-        }
-
-        @Override
-        public void run() {
-            while (running) {
-                synchronized (this) {
+    class GarbageCollectorTask implements Runnable {
+        private final class LedgersListCallback implements
+                AsyncCallback.VoidCallback {
+            @Override
+            public void processResult(int rc, String path, Object ctx) {
+                if (rc != Code.OK.intValue()) {
+                    LOG.error(
+                            "ZK error syncing the ledgers node when getting children: ",
+                            KeeperException.create(
+                                    KeeperException.Code.get(rc), path));
+                    return;
+                }
+                // Sync has completed successfully so now we can poll ZK
+                // and read in the latest set of active ledger nodes.
+                List<String> ledgerNodes;
+                try {
+                    ledgerNodes = bookie.zk.getChildren(LEDGERS_PATH, null);
+                } catch (Exception e) {
+                    LOG.error(
+                            "Error polling ZK for the available ledger nodes: ",
+                            e);
+                    // We should probably wait a certain amount of time
+                    // before retrying in case of temporary issues.
+                    return;
+                }
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Retrieved current set of ledger nodes: "
+                            + ledgerNodes);
+                }
+                // Convert the ZK retrieved ledger nodes to a HashSet for
+                // easier comparisons.
+                HashSet<Long> allActiveLedgers = new HashSet<Long>(
+                        ledgerNodes.size(), 1.0f);
+                for (String ledgerNode : ledgerNodes) {
                     try {
-                        wait(gcWaitTime);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
+                        // The available node is also stored in this path so
+                        // ignore that.
+                        // That node is the path for the set of available
+                        // Bookie Servers.
+                        if (ledgerNode.equals(AVAILABLE_NODE))
+                            continue;
+                        String parts[] = ledgerNode
+                                .split(LEDGER_NODE_PREFIX);
+                        allActiveLedgers.add(Long
+                                .parseLong(parts[parts.length - 1]));
+                    } catch (NumberFormatException e) {
+                        LOG.fatal("Error extracting ledgerId from ZK ledger node: "
+                                + ledgerNode);
+                        // This is a pretty bad error as it indicates a
+                        // ledger node in ZK
+                        // has an incorrect format. For now just continue
+                        // and consider
+                        // this as a non-existent ledger.
                         continue;
                     }
                 }
-                
-                try {
-                    extractLedgersFromEntryLogs();
-                } catch (IOException e1) {
-                    LOG.warn("Problem extracting ledgers from entry", e1);
+                ConcurrentMap<Long, Boolean> curActiveLedgers = bookie.ledgerCache.activeLedgers;
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("All active ledgers from ZK: "
+                            + allActiveLedgers);
+                    LOG.debug("Current active ledgers from Bookie: "
+                            + curActiveLedgers.keySet());
                 }
-
-                // Initialization check. No need to run any logic if we are still starting up.
-                if (bookie.zk == null || entryLogs2LedgersMap.isEmpty() || bookie.ledgerCache == null
-                        || bookie.ledgerCache.activeLedgers == null) {
-                    continue;
-                }
-                // First sync ZK to make sure we're reading the latest active/available ledger nodes.
-                bookie.zk.sync(LEDGERS_PATH, new AsyncCallback.VoidCallback() {
-                    @Override
-                    public void processResult(int rc, String path, Object ctx) {
-                        if (rc != Code.OK.intValue()) {
-                            LOG.error("ZK error syncing the ledgers node when getting children: ", KeeperException
-                                      .create(KeeperException.Code.get(rc), path));
-                            return;
-                        }
-                        // Sync has completed successfully so now we can poll ZK
-                        // and read in the latest set of active ledger nodes.
-                        List<String> ledgerNodes;
+                // Remove any active ledgers that don't exist in ZK.
+                for (Long ledger : curActiveLedgers.keySet()) {
+                    if (!allActiveLedgers.contains(ledger)) {
+                        // Remove it from the current active ledgers set and
+                        // also from all
+                        // LedgerCache data references to the ledger, i.e.
+                        // the physical ledger index file.
+                        LOG.info("Removing a non-active/deleted ledger: "
+                                + ledger);
+                        curActiveLedgers.remove(ledger);
                         try {
-                            ledgerNodes = bookie.zk.getChildren(LEDGERS_PATH, null);
-                        } catch (Exception e) {
-                            LOG.error("Error polling ZK for the available ledger nodes: ", e);
-                            // We should probably wait a certain amount of time before retrying in case of temporary issues.
-                            return;
+                            bookie.ledgerCache.deleteLedger(ledger);
+                        } catch (IOException e) {
+                            LOG.error(
+                                    "Exception when deleting the ledger index file on the Bookie: ",
+                                    e);
                         }
-                        if (LOG.isDebugEnabled()) {
-                            LOG.debug("Retrieved current set of ledger nodes: " + ledgerNodes);
+                    }
+                }
+                // Loop through all of the entry logs and remove the
+                // non-active ledgers.
+                for (Long entryLogId : entryLogs2LedgersMap.keySet()) {
+                    ConcurrentHashMap<Long, Boolean> entryLogLedgers = entryLogs2LedgersMap
+                            .get(entryLogId);
+                    for (Long entryLogLedger : entryLogLedgers.keySet()) {
+                        // Remove the entry log ledger from the set if it
+                        // isn't active.
+                        if (!bookie.ledgerCache.activeLedgers
+                                .containsKey(entryLogLedger)) {
+                            entryLogLedgers.remove(entryLogLedger);
                         }
-                        // Convert the ZK retrieved ledger nodes to a HashSet for easier comparisons.
-                        HashSet<Long> allActiveLedgers = new HashSet<Long>(ledgerNodes.size(), 1.0f);
-                        for (String ledgerNode : ledgerNodes) {
-                            try {
-                                // The available node is also stored in this path so ignore that.
-                                // That node is the path for the set of available Bookie Servers.
-                                if (ledgerNode.equals(AVAILABLE_NODE))
-                                    continue;
-                                String parts[] = ledgerNode.split(LEDGER_NODE_PREFIX);
-                                allActiveLedgers.add(Long.parseLong(parts[parts.length - 1]));
-                            } catch (NumberFormatException e) {
-                                LOG.fatal("Error extracting ledgerId from ZK ledger node: " + ledgerNode);
-                                // This is a pretty bad error as it indicates a ledger node in ZK
-                                // has an incorrect format. For now just continue and consider
-                                // this as a non-existent ledger.
-                                continue;
-                            }
+                    }
+                    if (entryLogLedgers.isEmpty()) {
+                        // This means the entry log is not associated with
+                        // any active ledgers anymore.
+                        // We can remove this entry log file now.
+                        LOG.info("Deleting entryLogId " + entryLogId
+                                + " as it has no active ledgers!");
+                        File entryLogFile;
+                        try {
+                            entryLogFile = findFile(entryLogId);
+                        } catch (FileNotFoundException e) {
+                            LOG.error("Trying to delete an entryLog file that could not be found: "
+                                    + entryLogId + ".log");
+                            continue;
                         }
-                        ConcurrentMap<Long, Boolean> curActiveLedgers = bookie.ledgerCache.activeLedgers;
-                        if (LOG.isDebugEnabled()) {
-                            LOG.debug("All active ledgers from ZK: " + allActiveLedgers);
-                            LOG.debug("Current active ledgers from Bookie: " + curActiveLedgers.keySet());
-                        }
-                        // Remove any active ledgers that don't exist in ZK.
-                        for (Long ledger : curActiveLedgers.keySet()) {
-                            if (!allActiveLedgers.contains(ledger)) {
-                                // Remove it from the current active ledgers set and also from all
-                                // LedgerCache data references to the ledger, i.e. the physical ledger index file.
-                                LOG.info("Removing a non-active/deleted ledger: " + ledger);
-                                curActiveLedgers.remove(ledger);
-                                try {
-                                    bookie.ledgerCache.deleteLedger(ledger);
-                                } catch (IOException e) {
-                                    LOG.error("Exception when deleting the ledger index file on the Bookie: ", e);
-                                }
-                            }
-                        }
-                        // Loop through all of the entry logs and remove the non-active ledgers.
-                        for (Long entryLogId : entryLogs2LedgersMap.keySet()) {
-                            ConcurrentHashMap<Long, Boolean> entryLogLedgers = entryLogs2LedgersMap.get(entryLogId);
-                            for (Long entryLogLedger : entryLogLedgers.keySet()) {
-                                // Remove the entry log ledger from the set if it isn't active.
-                                if (!bookie.ledgerCache.activeLedgers.containsKey(entryLogLedger)) {
-                                    entryLogLedgers.remove(entryLogLedger);
-                                }
-                            }
-                            if (entryLogLedgers.isEmpty()) {
-                                // This means the entry log is not associated with any active ledgers anymore.
-                                // We can remove this entry log file now.
-                                LOG.info("Deleting entryLogId " + entryLogId + " as it has no active ledgers!");
-                                File entryLogFile;
-                                try {
-                                    entryLogFile = findFile(entryLogId);
-                                } catch (FileNotFoundException e) {
-                                    LOG.error("Trying to delete an entryLog file that could not be found: "
-                                              + entryLogId + ".log");
-                                    continue;
-                                }
-                                entryLogFile.delete();
-                                channels.remove(entryLogId);
-                                entryLogs2LedgersMap.remove(entryLogId);
-                            }
-                        }
-                    };
-                }, null);
+                        entryLogFile.delete();
+                        channels.remove(entryLogId);
+                        entryLogs2LedgersMap.remove(entryLogId);
+                    }
+                }
             }
+        }
+
+        @Override
+        synchronized public void run() {
+            try {
+                extractLedgersFromEntryLogs();
+            } catch (IOException e1) {
+                LOG.warn("Problem extracting ledgers from entry", e1);
+            }
+
+            // Initialization check. No need to run any logic if we are still
+            // starting up.
+            if (bookie.zk == null || entryLogs2LedgersMap.isEmpty()
+                    || bookie.ledgerCache == null
+                    || bookie.ledgerCache.activeLedgers == null) {
+                return;
+            }
+            // First sync ZK to make sure we're reading the latest
+            // active/available ledger nodes.
+            bookie.zk.sync(LEDGERS_PATH, new LedgersListCallback(), null);
         }
     }
 
@@ -482,9 +504,8 @@ public class EntryLogger {
      * @throws InterruptedException if there is an exception stopping threads.
      */
     public void shutdown() throws InterruptedException {
-        gcThread.running = false;
-        gcThread.interrupt();
-        gcThread.join();
+        scheduler.shutdown();
+        scheduler.awaitTermination(100, TimeUnit.SECONDS);
     }
 
 }
