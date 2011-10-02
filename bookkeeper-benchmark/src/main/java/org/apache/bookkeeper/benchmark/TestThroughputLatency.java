@@ -151,7 +151,6 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     long runningAverage = 0;
     long runningAverageCounter = 1;
     long totalTime = 0;
-    volatile double avgLatency = 0;
     @Override
     synchronized public void addComplete(int rc, LedgerHandle lh, long entryId, Object ctx) {
         Context context = (Context) ctx;
@@ -160,16 +159,17 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         // we need to use the id passed in the context in the case of
         // multiple ledgers, and it works even with one ledger
         entryId = context.id;
-        if((entryId % 500) == 0){ 
+        //if((entryId % 500) == 0){ 
             long newTime = System.nanoTime() - context.localStartTime;
             totalTime += newTime; 
             ++runningAverageCounter;
-        }
+        //}
         
         if((entryId % threshold) == (threshold - 1)){
             final long now = System.currentTimeMillis();
             long diff = now - previous;
             long toOutput = entryId + 1;
+            double avgLatency = -1;
             //System.out.println("SAMPLE\t" + toOutput + "\t" + diff);
             previous = now;
             if(runningAverageCounter > 0){
@@ -266,7 +266,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         final long completionCount = ttl.completions.get();
         double tp = (double)completionCount/(double)runningTime;
         System.out.println(completionCount + " completions in " + totalTime + " seconds: " + tp + " ops/sec");
-        System.out.println("Average latency: " + ttl.avgLatency);
+        System.out.println("Average latency: " + ((double)ttl.totalTime /(double)ttl.runningAverageCounter)/1000000.0);
         Runtime.getRuntime().halt(0);
     }
 
