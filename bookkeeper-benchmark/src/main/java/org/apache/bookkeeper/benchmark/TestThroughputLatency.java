@@ -1,6 +1,7 @@
 package org.apache.bookkeeper.benchmark;
 
 import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -315,12 +316,28 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     private static double percentile(ArrayList<Long> latency, int percentile) {
         int size = latency.size();
         int sampleSize = (size * percentile) / 100;
-        int skip = size - sampleSize;
         long total = 0;
-        for(int i = skip; i < size; i++) {
+        int count = 0;
+        for(int i = 0; i < sampleSize; i++) {
             total += latency.get(i);
+            count++;
         }
-        return (double)total/(double)sampleSize;
+        System.out.println("Count = " + count + " sampleSize = " + sampleSize);
+        return ((double)total/(double)count)/1000000.0;
+    }
+    
+    public static class PercentileDump {
+        public static void main(String args[]) throws NumberFormatException, IOException {
+            ArrayList<Long> latency = new ArrayList<Long>();
+            DataInputStream dis = new DataInputStream(System.in);
+            String line;
+            while((line = dis.readLine()) != null) {
+                latency.add(Long.parseLong(line));
+            }
+            Collections.sort(latency);
+            System.out.println("99th percentile latency: " + percentile(latency, 99));
+            System.out.println("95th percentile latency: " + percentile(latency, 95));
+        }
     }
 
     private static long warmUp(String servers, int paceInNanos, byte[] data,
