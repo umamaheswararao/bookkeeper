@@ -295,15 +295,20 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         for(int i = 0; i < ttl.latencyIndex; i++) {
             latency.add(ttl.latencies[i]);
         }
-        Collections.sort(latency);
-        System.out.println("99th percentile latency: " + percentile(latency, 99));
-        System.out.println("95th percentile latency: " + percentile(latency, 95));
+        
+        // dump the latencies for later debugging (it will be sorted by entryid)
         OutputStream fos = new BufferedOutputStream(new FileOutputStream("latencyDump.dat"));
         
         for(Long l: latency) {
             fos.write((Long.toString(l)+"\n").getBytes());
         }
         fos.flush();
+        fos.close();
+        
+        // now get the latencies
+        Collections.sort(latency);
+        System.out.println("99th percentile latency: " + percentile(latency, 99));
+        System.out.println("95th percentile latency: " + percentile(latency, 95));
         Runtime.getRuntime().halt(0);
     }
 
