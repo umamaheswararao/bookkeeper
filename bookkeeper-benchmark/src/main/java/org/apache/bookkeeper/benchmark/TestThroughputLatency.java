@@ -1,6 +1,12 @@
 package org.apache.bookkeeper.benchmark;
 
+import java.io.BufferedOutputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Random;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
@@ -80,9 +86,12 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         return lastLedger;
     }
     
+    long latencies[] = new long[1000000];
+    int latencyIndex = -1;
     int sendLimit = Integer.MAX_VALUE;
     public void setSendLimit(int sendLimit) {
         this.sendLimit = sendLimit;
+        latencies = new long[sendLimit];
     }
     
     public void run() {
@@ -165,6 +174,11 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         int c = -1;
         synchronized(this) {
             runningAverageCounter++;
+            latencies[(int)entryId] = newTime;
+            if (latencyIndex >= entryId) {
+                LOG.error("On entry " + entryId + " ledgerIndex = " + latencyIndex);
+            }
+            latencyIndex = (int)entryId;
             totalTime += newTime;
             completions++;
             tt = totalTime;
@@ -277,7 +291,31 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         double tp = (double)cc/(double)runningTime;
         System.out.println(cc + " completions in " + totalTime + " seconds: " + tp + " ops/sec");
         System.out.println("Average latency: " + ((double)tt /(double)rac)/1000000.0);
+        ArrayList<Long> latency = new ArrayList<Long>();
+        for(int i = 0; i < ttl.latencyIndex; i++) {
+            latency.add(ttl.latencies[i]);
+        }
+        Collections.sort(latency);
+        System.out.println("99th percentile latency: " + percentile(latency, 99));
+        System.out.println("95th percentile latency: " + percentile(latency, 95));
+        OutputStream fos = new BufferedOutputStream(new FileOutputStream("latencyDump.dat"));
+        
+        for(Long l: latency) {
+            fos.write((Long.toString(l)+"\n").getBytes());
+        }
+        fos.flush();
         Runtime.getRuntime().halt(0);
+    }
+
+    private static double percentile(ArrayList<Long> latency, int percentile) {
+        int size = latency.size();
+        int sampleSize = (size * percentile) / 100;
+        int skip = size - sampleSize;
+        long total = 0;
+        for(int i = skip; i < size; i++) {
+            total += latency.get(i);
+        }
+        return (double)total/(double)sampleSize;
     }
 
     private static long warmUp(String servers, int paceInNanos, byte[] data,
