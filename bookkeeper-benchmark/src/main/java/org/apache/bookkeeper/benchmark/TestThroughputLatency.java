@@ -148,22 +148,19 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     }
     
     long threshold = 20000;
-    long runningAverage = 0;
-    long runningAverageCounter = 1;
-    long totalTime = 0;
+    AtomicLong runningAverageCounter = new AtomicLong();
+    AtomicLong totalTime = new AtomicLong();
     @Override
-    synchronized public void addComplete(int rc, LedgerHandle lh, long entryId, Object ctx) {
+    public void addComplete(int rc, LedgerHandle lh, long entryId, Object ctx) {
         Context context = (Context) ctx;
         
         completions.incrementAndGet();
         // we need to use the id passed in the context in the case of
         // multiple ledgers, and it works even with one ledger
         entryId = context.id;
-        //if((entryId % 500) == 0){ 
-            long newTime = System.nanoTime() - context.localStartTime;
-            totalTime += newTime; 
-            ++runningAverageCounter;
-        //}
+        long newTime = System.nanoTime() - context.localStartTime;
+        totalTime.addAndGet(newTime);
+        runningAverageCounter.incrementAndGet();
         
         if((entryId % threshold) == (threshold - 1)){
             final long now = System.currentTimeMillis();
@@ -172,8 +169,10 @@ public class TestThroughputLatency implements AddCallback, Runnable {
             double avgLatency = -1;
             //System.out.println("SAMPLE\t" + toOutput + "\t" + diff);
             previous = now;
-            if(runningAverageCounter > 0){
-                avgLatency = ((double)totalTime /(double)runningAverageCounter)/1000000.0;
+            final long tt = totalTime.get();
+            final long c = runningAverageCounter.get();
+            if(c > 0){
+                avgLatency = ((double)tt/(double)c)/1000000.0;
             }
             //runningAverage = 0;
             // totalTime = 0;
@@ -266,7 +265,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         final long completionCount = ttl.completions.get();
         double tp = (double)completionCount/(double)runningTime;
         System.out.println(completionCount + " completions in " + totalTime + " seconds: " + tp + " ops/sec");
-        System.out.println("Average latency: " + ((double)ttl.totalTime /(double)ttl.runningAverageCounter)/1000000.0);
+        System.out.println("Average latency: " + ((double)ttl.totalTime.get() /(double)ttl.runningAverageCounter.get())/1000000.0);
         Runtime.getRuntime().halt(0);
     }
 
