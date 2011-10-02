@@ -87,14 +87,18 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         return lastLedger;
     }
     
-    long latencies[] = new long[1000000];
+    int sendLimit = 2000000;
+    long latencies[] = new long[sendLimit];
     int latencyIndex = -1;
-    int sendLimit = Integer.MAX_VALUE;
     public void setSendLimit(int sendLimit) {
         this.sendLimit = sendLimit;
         latencies = new long[sendLimit];
     }
     
+    long duration = -1;
+    synchronized public long getDuration() {
+        return duration;
+    }
     public void run() {
         LOG.info("Running...");
         long start = previous = System.currentTimeMillis();
@@ -125,6 +129,9 @@ public class TestThroughputLatency implements AddCallback, Runnable {
                 if (toSend > limit) {
                     toSend = limit;
                 }
+                if (toSend + sent > sendLimit) {
+                    toSend = sendLimit - sent;
+                }
                 counter += toSend;
             }
             for(int i = 0; i < toSend; i++) {
@@ -148,7 +155,9 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         } catch(InterruptedException e) {
             e.printStackTrace();
         }
-        final long duration = System.currentTimeMillis() - start;
+        synchronized(this) {
+            duration = System.currentTimeMillis() - start;
+        }
         throughput = sent*1000/duration;
         LOG.info("Finished processing in ms: " + duration + " tp = " + throughput);
         System.out.flush();
@@ -280,6 +289,8 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         thread = new Thread(ttl);
         thread.start();
         Thread.sleep(totalTime);
+        thread.interrupt();
+        thread.join();
         long rac = -1;
         long tt = -1;
         long cc = -1;
@@ -288,9 +299,8 @@ public class TestThroughputLatency implements AddCallback, Runnable {
             tt = ttl.totalTime;
             cc = ttl.completions;
         }
-        thread.interrupt();
-        double tp = (double)cc/(double)runningTime;
-        System.out.println(cc + " completions in " + totalTime + " seconds: " + tp + " ops/sec");
+        double tp = (double)cc*1000.0/(double)ttl.getDuration();
+        System.out.println(cc + " completions in " + ttl.getDuration() + " seconds: " + tp + " ops/sec");
         System.out.println("Average latency: " + ((double)tt /(double)rac)/1000000.0);
         ArrayList<Long> latency = new ArrayList<Long>();
         for(int i = 0; i < ttl.latencyIndex; i++) {
@@ -322,7 +332,6 @@ public class TestThroughputLatency implements AddCallback, Runnable {
             total += latency.get(i);
             count++;
         }
-        System.out.println("Count = " + count + " sampleSize = " + sampleSize);
         return ((double)total/(double)count)/1000000.0;
     }
     
