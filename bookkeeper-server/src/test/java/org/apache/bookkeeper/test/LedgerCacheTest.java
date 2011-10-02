@@ -117,7 +117,7 @@ public class LedgerCacheTest extends TestCase {
          */
         try {
             byte[] masterKey = "blah".getBytes();
-            for( int i = 0; i < 30000; i++) {
+            for( int i = 0; i < 300; i++) {
                 MacDigestManager dm = new MacDigestManager(i, masterKey);
                 byte[] data = "0123456789".getBytes();
                 ByteBuffer entry = dm.computeDigestAndPackageForSending(0, 0, 10, data, 0, data.length).toByteBuffer();

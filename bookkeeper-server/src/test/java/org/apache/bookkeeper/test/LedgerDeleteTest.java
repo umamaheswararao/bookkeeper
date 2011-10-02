@@ -26,6 +26,7 @@ import java.io.File;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.BookKeeper.DigestType;
 import org.apache.bookkeeper.proto.BookieServer;
+import org.apache.zookeeper.AsyncCallback.VoidCallback;
 import org.apache.log4j.Logger;
 import org.junit.Before;
 import org.junit.Test;
@@ -97,7 +98,9 @@ public class LedgerDeleteTest extends BaseTestCase {
         for (LedgerHandle lh : lhs) {
             bkc.deleteLedger(lh.getId());
         }
-        
+        zkc.sync("/", new VoidCallback() {
+            public void processResult(int arg0, String arg1, Object arg2) {}
+        }, null);
         LOG.info("Finished deleting all ledgers so waiting for the GC thread to clean up the entryLogs");
         wakeUpEntryLoggerGc();
 
