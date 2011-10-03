@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -18,7 +19,13 @@ import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.AsyncCallback.AddCallback;
 import org.apache.bookkeeper.util.MainUtil;
 import org.apache.log4j.Logger;
+import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.ZooKeeper;
+import org.apache.zookeeper.Watcher.Event.EventType;
 
 public class TestThroughputLatency implements AddCallback, Runnable {
     static Logger LOG = Logger.getLogger(TestThroughputLatency.class);
@@ -231,18 +238,18 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     
     public static void main(String[] args) 
     throws KeeperException, IOException, InterruptedException {
-        if (args.length < 7) {
-            System.err.println("USAGE: " + TestThroughputLatency.class.getName() + " running_time(secs) sizeof_entry ensemble_size quorum_size throttle throughput(ops/sec) number_of_ledgers zk_server\n");
+        if (args.length < 8) {
+            System.err.println("USAGE: " + TestThroughputLatency.class.getName() + " running_time(secs) sizeof_entry ensemble_size quorum_size throttle throughput(ops/sec) number_of_ledgers zk_server [coordination_znode]\n");
             System.exit(2);
         }
-        StringBuffer servers_sb = new StringBuffer();
-        for (int i = 7; i < args.length; i++){
-            servers_sb.append(args[i] + " ");
+        String coordinationZnode = null;
+        if (args.length == 9) {
+            coordinationZnode = args[8];
         }
     
         MainUtil.outputInitInfo();
         long runningTime = Long.parseLong(args[0]);
-        String servers = servers_sb.toString().trim().replace(' ', ',');
+        String servers = args[7];
         LOG.warn("(Parameters received) running time: " + args[0] + 
                 ", Length: " + args[1] + ", ensemble size: " + args[2] + 
                 ", quorum size" + args[3] + 
@@ -287,6 +294,26 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         TestThroughputLatency ttl = new TestThroughputLatency(paceInNanos, ensemble, qSize, throttle, ledgers, servers);
         ttl.setEntryData(data);
         thread = new Thread(ttl);
+        ZooKeeper zk = null;
+        if (coordinationZnode != null) {
+            zk = new ZooKeeper(servers, 15000, new Watcher() {
+                @Override
+                public void process(WatchedEvent arg0) {
+                }});
+            final CountDownLatch latch = new CountDownLatch(1);
+            LOG.info("Waiting for " + coordinationZnode);
+            if (zk.exists(coordinationZnode, new Watcher() {
+                @Override
+                public void process(WatchedEvent event) {
+                    if (event.getType() == EventType.NodeCreated) {
+                        latch.countDown();
+                    }
+                }}) != null) {
+                latch.countDown();
+            }
+            latch.await();
+            LOG.info("Coordination znode created");
+        }
         thread.start();
         Thread.sleep(totalTime);
         thread.interrupt();
@@ -300,6 +327,9 @@ public class TestThroughputLatency implements AddCallback, Runnable {
             cc = ttl.completions;
         }
         double tp = (double)cc*1000.0/(double)ttl.getDuration();
+        if (zk != null) {
+            zk.create(coordinationZnode + "/worker-", ("tp " + tp + " duration " + ttl.getDuration()).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT_SEQUENTIAL);
+        }
         System.out.println(cc + " completions in " + ttl.getDuration() + " seconds: " + tp + " ops/sec");
         System.out.println("Average latency: " + ((double)tt /(double)rac)/1000000.0);
         ArrayList<Long> latency = new ArrayList<Long>();
