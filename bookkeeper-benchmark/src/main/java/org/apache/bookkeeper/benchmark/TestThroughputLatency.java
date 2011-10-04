@@ -1,7 +1,15 @@
 package org.apache.bookkeeper.benchmark;
 
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -9,16 +17,23 @@ import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.AsyncCallback.AddCallback;
+import org.apache.bookkeeper.util.MainUtil;
 import org.apache.log4j.Logger;
+import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.ZooKeeper;
+import org.apache.zookeeper.Watcher.Event.EventType;
 
 public class TestThroughputLatency implements AddCallback, Runnable {
     static Logger LOG = Logger.getLogger(TestThroughputLatency.class);
 
     BookKeeper bk;
     LedgerHandle lh[];
-    AtomicLong counter;
-    AtomicLong completions = new AtomicLong(0);
+    int counter;
+    int completions = 0;
     Semaphore sem;
     int paceInNanos;
     int throttle;
@@ -44,7 +59,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         System.setProperty("throttle", Integer.toString(throttle));
         this.throttle = throttle;
         bk = new BookKeeper(servers);
-        this.counter = new AtomicLong(0);
+        this.counter = 0;
         this.numberOfLedgers = numberOfLedgers;
         try{
             //System.setProperty("throttle", throttle.toString());
@@ -79,11 +94,18 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         return lastLedger;
     }
     
-    int sendLimit = Integer.MAX_VALUE;
+    int sendLimit = 2000000;
+    long latencies[] = new long[sendLimit];
+    int latencyIndex = -1;
     public void setSendLimit(int sendLimit) {
         this.sendLimit = sendLimit;
+        latencies = new long[sendLimit];
     }
     
+    long duration = -1;
+    synchronized public long getDuration() {
+        return duration;
+    }
     public void run() {
         LOG.info("Running...");
         long start = previous = System.currentTimeMillis();
@@ -109,9 +131,15 @@ public class TestThroughputLatency implements AddCallback, Runnable {
                     LOG.error("We are sending " + toSend + " ops in this interval");
                 }
             }
-            int limit = (int) (throttle - counter.get());
-            if (toSend > limit) {
-                toSend = limit;
+            synchronized(this) {
+                int limit = (int) (throttle - counter);
+                if (toSend > limit) {
+                    toSend = limit;
+                }
+                if (toSend + sent > sendLimit) {
+                    toSend = sendLimit - sent;
+                }
+                counter += toSend;
             }
             for(int i = 0; i < toSend; i++) {
                 final int index = getRandomLedger();
@@ -119,7 +147,6 @@ public class TestThroughputLatency implements AddCallback, Runnable {
                 if (h == null) {
                     LOG.error("Handle " + index + " is null!");
                 } else {
-                    counter.getAndIncrement();
                     lh[index].asyncAddEntry(bytes, this, new Context(sent, nanoTime));
                 }
                 sent++;
@@ -129,13 +156,15 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         
         try {
             synchronized (this) {
-                while(this.counter.get() > 0)
+                while(this.counter > 0)
                     wait();
             }
         } catch(InterruptedException e) {
             e.printStackTrace();
         }
-        final long duration = System.currentTimeMillis() - start;
+        synchronized(this) {
+            duration = System.currentTimeMillis() - start;
+        }
         throughput = sent*1000/duration;
         LOG.info("Finished processing in ms: " + duration + " tp = " + throughput);
         System.out.flush();
@@ -147,44 +176,50 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     }
     
     long threshold = 20000;
-    long runningAverage = 0;
-    long runningAverageCounter = 1;
+    long runningAverageCounter = 0;
     long totalTime = 0;
-    volatile double avgLatency = 0;
     @Override
-    synchronized public void addComplete(int rc, LedgerHandle lh, long entryId, Object ctx) {
+    public void addComplete(int rc, LedgerHandle lh, long entryId, Object ctx) {
         Context context = (Context) ctx;
         
-        completions.incrementAndGet();
         // we need to use the id passed in the context in the case of
         // multiple ledgers, and it works even with one ledger
         entryId = context.id;
-        if((entryId % 500) == 0){ 
-            long newTime = System.nanoTime() - context.localStartTime;
-            totalTime += newTime; 
-            ++runningAverageCounter;
+        long newTime = System.nanoTime() - context.localStartTime;
+        long tt = -1;
+        long rac = -1;
+        int c = -1;
+        synchronized(this) {
+            runningAverageCounter++;
+            latencies[(int)entryId] = newTime;
+            if (latencyIndex >= entryId) {
+                LOG.error("On entry " + entryId + " ledgerIndex = " + latencyIndex);
+            }
+            latencyIndex = (int)entryId;
+            totalTime += newTime;
+            completions++;
+            tt = totalTime;
+            rac = runningAverageCounter;
+            counter--;
+            c = counter;
+            notify();
         }
         
         if((entryId % threshold) == (threshold - 1)){
             final long now = System.currentTimeMillis();
             long diff = now - previous;
             long toOutput = entryId + 1;
+            double avgLatency = -1;
             //System.out.println("SAMPLE\t" + toOutput + "\t" + diff);
             previous = now;
-            if(runningAverageCounter > 0){
-                avgLatency = ((double)totalTime /(double)runningAverageCounter)/1000000.0;
+            if(rac > 0){
+                avgLatency = ((double)tt/(double)rac)/1000000.0;
             }
             //runningAverage = 0;
             // totalTime = 0;
             // runningAverageCounter = 0;
-            System.out.println("SAMPLE\t" + toOutput + "\t" + diff + "\t" + avgLatency + "\t" + counter.get());
+            System.out.println("SAMPLE\t" + toOutput + "\t" + diff + "\t" + avgLatency + "\t" + c);
         }
-        
-        //sem.release();
-        // we the counter was at throttle we need to notify
-        final long count = counter.decrementAndGet();
-        if(count == throttle-1 || count == 0)
-            notify();
     }
     
     /**
@@ -203,17 +238,18 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     
     public static void main(String[] args) 
     throws KeeperException, IOException, InterruptedException {
-        if (args.length < 7) {
-            System.err.println("USAGE: " + TestThroughputLatency.class.getName() + " running_time(secs) sizeof_entry ensemble_size quorum_size throttle throughput(ops/sec) number_of_ledgers zk_server\n");
+        if (args.length < 8) {
+            System.err.println("USAGE: " + TestThroughputLatency.class.getName() + " running_time(secs) sizeof_entry ensemble_size quorum_size throttle throughput(ops/sec) number_of_ledgers zk_server [coordination_znode]\n");
             System.exit(2);
         }
-        StringBuffer servers_sb = new StringBuffer();
-        for (int i = 7; i < args.length; i++){
-            servers_sb.append(args[i] + " ");
+        String coordinationZnode = null;
+        if (args.length == 9) {
+            coordinationZnode = args[8];
         }
     
+        MainUtil.outputInitInfo();
         long runningTime = Long.parseLong(args[0]);
-        String servers = servers_sb.toString().trim().replace(' ', ',');
+        String servers = args[7];
         LOG.warn("(Parameters received) running time: " + args[0] + 
                 ", Length: " + args[1] + ", ensemble size: " + args[2] + 
                 ", quorum size" + args[3] + 
@@ -240,6 +276,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         int qSize = Integer.parseInt(args[3]);
         int throttle = Integer.parseInt(args[4]);
         Thread thread;
+        /*
         long lastWarmUpTP = -1;
         long throughput;
         LOG.info("Starting warmup");
@@ -249,6 +286,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
             // we will just run once, so lets break
             break;
         }
+        */
         
         LOG.info("Warmup phase finished");
         
@@ -256,14 +294,89 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         TestThroughputLatency ttl = new TestThroughputLatency(paceInNanos, ensemble, qSize, throttle, ledgers, servers);
         ttl.setEntryData(data);
         thread = new Thread(ttl);
+        ZooKeeper zk = null;
+        if (coordinationZnode != null) {
+            zk = new ZooKeeper(servers, 15000, new Watcher() {
+                @Override
+                public void process(WatchedEvent arg0) {
+                }});
+            final CountDownLatch latch = new CountDownLatch(1);
+            LOG.info("Waiting for " + coordinationZnode);
+            if (zk.exists(coordinationZnode, new Watcher() {
+                @Override
+                public void process(WatchedEvent event) {
+                    if (event.getType() == EventType.NodeCreated) {
+                        latch.countDown();
+                    }
+                }}) != null) {
+                latch.countDown();
+            }
+            latch.await();
+            LOG.info("Coordination znode created");
+        }
         thread.start();
         Thread.sleep(totalTime);
         thread.interrupt();
-        final long completionCount = ttl.completions.get();
-        double tp = (double)completionCount/(double)runningTime;
-        System.out.println(completionCount + " completions in " + totalTime + " seconds: " + tp + " ops/sec");
-        System.out.println("Average latency: " + ttl.avgLatency);
+        thread.join();
+        long rac = -1;
+        long tt = -1;
+        long cc = -1;
+        synchronized(ttl) {
+            rac = ttl.runningAverageCounter;
+            tt = ttl.totalTime;
+            cc = ttl.completions;
+        }
+        double tp = (double)cc*1000.0/(double)ttl.getDuration();
+        if (zk != null) {
+            zk.create(coordinationZnode + "/worker-", ("tp " + tp + " duration " + ttl.getDuration()).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT_SEQUENTIAL);
+        }
+        System.out.println(cc + " completions in " + ttl.getDuration() + " seconds: " + tp + " ops/sec");
+        System.out.println("Average latency: " + ((double)tt /(double)rac)/1000000.0);
+        ArrayList<Long> latency = new ArrayList<Long>();
+        for(int i = 0; i < ttl.latencyIndex; i++) {
+            latency.add(ttl.latencies[i]);
+        }
+        
+        // dump the latencies for later debugging (it will be sorted by entryid)
+        OutputStream fos = new BufferedOutputStream(new FileOutputStream("latencyDump.dat"));
+        
+        for(Long l: latency) {
+            fos.write((Long.toString(l)+"\n").getBytes());
+        }
+        fos.flush();
+        fos.close();
+        
+        // now get the latencies
+        Collections.sort(latency);
+        System.out.println("99th percentile latency: " + percentile(latency, 99));
+        System.out.println("95th percentile latency: " + percentile(latency, 95));
         Runtime.getRuntime().halt(0);
+    }
+
+    private static double percentile(ArrayList<Long> latency, int percentile) {
+        int size = latency.size();
+        int sampleSize = (size * percentile) / 100;
+        long total = 0;
+        int count = 0;
+        for(int i = 0; i < sampleSize; i++) {
+            total += latency.get(i);
+            count++;
+        }
+        return ((double)total/(double)count)/1000000.0;
+    }
+    
+    public static class PercentileDump {
+        public static void main(String args[]) throws NumberFormatException, IOException {
+            ArrayList<Long> latency = new ArrayList<Long>();
+            DataInputStream dis = new DataInputStream(System.in);
+            String line;
+            while((line = dis.readLine()) != null) {
+                latency.add(Long.parseLong(line));
+            }
+            Collections.sort(latency);
+            System.out.println("99th percentile latency: " + percentile(latency, 99));
+            System.out.println("95th percentile latency: " + percentile(latency, 95));
+        }
     }
 
     private static long warmUp(String servers, int paceInNanos, byte[] data,

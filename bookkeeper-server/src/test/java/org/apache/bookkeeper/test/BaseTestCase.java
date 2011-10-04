@@ -124,6 +124,12 @@ public abstract class BaseTestCase extends TestCase {
         }
     }
 
+    protected void wakeUpEntryLoggerGc() {
+        for(BookieServer b: bs) {
+            b.getBookie().gcEntries();
+        }
+    }
+    
     @After
     @Override
     public void tearDown() throws Exception {

@@ -351,7 +351,7 @@ public class NIOServerFactory extends Thread {
         public Cnxn(SocketChannel sock, SelectionKey sk) throws IOException {
             this.sock = sock;
             this.sk = sk;
-            sock.socket().setTcpNoDelay(true);
+            sock.socket().setTcpNoDelay(!System.getProperty("server.tcpnodelay", "true").toLowerCase().equals("false"));
             sock.socket().setSoLinger(true, 2);
             sk.interestOps(SelectionKey.OP_READ);
             if (LOG.isTraceEnabled()) {

@@ -88,7 +88,7 @@ public class BenchBookie {
         
         System.err.println("Benchmarking latency");
         int entryCount = 5000;
-        long startTime = System.currentTimeMillis();
+        long startTime = System.nanoTime();
         for(long entry = 0; entry < entryCount; entry++) {
             ChannelBuffer toSend = ChannelBuffers.buffer(1024);
             toSend.resetReaderIndex();
@@ -100,8 +100,8 @@ public class BenchBookie {
             bc.addEntry(new InetSocketAddress(addr, port), 2, new byte[20], entry, toSend, lc, null);
             lc.waitForComplete();
         }
-        long endTime = System.currentTimeMillis();
-        System.out.println("Latency: " + (endTime-startTime)/((long)entryCount));
+        long endTime = System.nanoTime();
+        System.out.println("Latency: " + (((double)(endTime-startTime))/((double)entryCount))/1000000.0);
         
         entryCount = 50000;
         System.err.println("Benchmarking throughput");

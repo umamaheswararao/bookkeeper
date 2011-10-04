@@ -35,10 +35,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.bookkeeper.bookie.BookieException;
-import org.apache.bookkeeper.proto.BookieServer;
 import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.WriteCallback;
 import org.apache.log4j.Logger;
 import org.apache.zookeeper.CreateMode;
@@ -71,7 +74,9 @@ public class Bookie extends Thread {
 
     // Running flag
     private volatile boolean running = false;
-
+    
+    ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
+    
     public static class NoLedgerException extends IOException {
         private static final long serialVersionUID = 1L;
         private long ledgerId;
@@ -101,41 +106,38 @@ public class Bookie extends Thread {
 
     EntryLogger entryLogger;
     LedgerCache ledgerCache;
-    class SyncThread extends Thread {
-        volatile boolean running = true;
-        public SyncThread() {
-            super("SyncThread");
-        }
+    
+    public void gcEntries() {
+        syncTask.run();
+        entryLogger.gcTask.run();
+    }
+    
+    SyncTask syncTask = new SyncTask();
+    class SyncTask implements Runnable {
         @Override
-        public void run() {
-            while(running) {
-                synchronized(this) {
-                    try {
-                        wait(100);
-                        if (!entryLogger.testAndClearSomethingWritten()) {
-                            continue;
-                        }
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        continue;
-                    }
-                }
-                lastLogMark.markLog();
-                try {
-                    ledgerCache.flushLedger(true);
-                } catch (IOException e) {
-                    LOG.error("Exception flushing Ledger", e);
-                }
-                try {
-                    entryLogger.flush();
-                } catch (IOException e) {
-                    LOG.error("Exception flushing entry logger", e);
-                }
-                lastLogMark.rollLog();
+        synchronized public void run() {
+            if (!entryLogger.testAndClearSomethingWritten()) {
+                return;
+            }
+            lastLogMark.markLog();
+            try {
+                ledgerCache.flushLedger(true);
+            } catch (IOException e) {
+                LOG.error("Exception flushing Ledger", e);
+            }
+            try {
+                entryLogger.flush();
+            } catch (IOException e) {
+                LOG.error("Exception flushing entry logger", e);
+            }
+            lastLogMark.rollLog();
+            try {
+                ledgerCache.checkOpenFileLimit();
+            } catch (IOException e) {
+                LOG.warn("Problem checking open files", e);
             }
         }
     }
-    SyncThread syncThread = new SyncThread();
 
     public Bookie(int port, String zkServers, File journalDirectory, File ledgerDirectories[]) throws IOException {
         this.journalDirectory = journalDirectory;
@@ -208,7 +210,7 @@ public class Bookie extends Thread {
         setDaemon(true);
         LOG.debug("I'm starting a bookie with journal directory " + journalDirectory.getName());
         start();
-        syncThread.start();
+        scheduler.scheduleAtFixedRate(syncTask, 100, 100, TimeUnit.MILLISECONDS);
         // set running here.
         // since bookie server use running as a flag to tell bookie server whether it is alive
         // if setting it in bookie thread, the watcher might run before bookie thread.
@@ -516,8 +518,8 @@ public class Bookie extends Thread {
         if(zk != null) zk.close();
         this.interrupt();
         this.join();
-        syncThread.running = false;
-        syncThread.join();
+        scheduler.shutdown();
+        scheduler.awaitTermination(10, TimeUnit.SECONDS);
         for(LedgerDescriptor d: ledgers.values()) {
             d.close();
         }
