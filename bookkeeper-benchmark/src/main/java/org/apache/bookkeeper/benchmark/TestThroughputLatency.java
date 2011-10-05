@@ -32,10 +32,10 @@ public class TestThroughputLatency implements AddCallback, Runnable {
 
     BookKeeper bk;
     LedgerHandle lh[];
-    int counter;
-    int completions = 0;
+    AtomicLong counter;
+    //AtomicLong completions = 0;
     Semaphore sem;
-    int paceInNanos;
+    int pace;
     int throttle;
     int numberOfLedgers = 1;
     
@@ -50,18 +50,25 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         }
     }
     
-    public TestThroughputLatency(int paceInNanos, int ensemble, int qSize, int throttle, int numberOfLedgers, String servers) 
+    public TestThroughputLatency(int pace, int ensemble, int qSize, int throttle, int numberOfLedgers, String servers) 
     throws KeeperException, 
         IOException, 
         InterruptedException {
-        //this.sem = new Semaphore(Integer.parseInt(throttle));
-        this.paceInNanos = paceInNanos;
-        System.setProperty("throttle", Integer.toString(throttle));
+        this.sem = new Semaphore(pace);
+        this.pace = pace;
+        System.setProperty("throttle", Integer.toString(100000));
         this.throttle = throttle;
         bk = new BookKeeper(servers);
-        this.counter = 0;
+        this.counter = new AtomicLong(0);
         this.numberOfLedgers = numberOfLedgers;
         try{
+            LedgerHandle warmup = bk.createLedger(6, 6, BookKeeper.DigestType.CRC32, new byte[] {'a', 'b'});
+            byte[] data = new byte[128];
+            for (int i = 0; i < 100000; i++) {
+                warmup.addEntry(data);
+            }
+            warmup.close();
+
             //System.setProperty("throttle", throttle.toString());
             lh = new LedgerHandle[this.numberOfLedgers];
             for(int i = 0; i < this.numberOfLedgers; i++) {
@@ -109,29 +116,33 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     public void run() {
         LOG.info("Running...");
         long start = previous = System.currentTimeMillis();
-        long millis = paceInNanos/1000000;
-        int nanos = paceInNanos%1000000;
-        long lastNanoTime = System.nanoTime();
+        //        long millis = paceInNanos/1000000;
+        //int nanos = paceInNanos%1000000;
+        //long lastNanoTime = System.nanoTime();
         byte messageCount = 0;
         int sent = 0;
         while(!Thread.currentThread().isInterrupted() && sent < sendLimit) {
-            if (paceInNanos > 0) {
+            /*if (paceInNanos > 0) {
                 try {
                     Thread.sleep(millis, nanos);
                 } catch (InterruptedException e) {
                     break;
                 }
+                }*/
+            try {
+                sem.acquire();
+            } catch (InterruptedException e) {
+                break;
             }
-            //sem.acquire();
-            long nanoTime = System.nanoTime();
-            int toSend = throttle;
+            
+            /*int toSend = throttle;
             if (paceInNanos > 0) {
                 toSend = (int) ((nanoTime-lastNanoTime)/paceInNanos);
                 if (toSend > 100 && (++messageCount&0xff) < 5) {
                     LOG.error("We are sending " + toSend + " ops in this interval");
                 }
-            }
-            synchronized(this) {
+                }*/
+            /*synchronized(this) {
                 int limit = (int) (throttle - counter);
                 if (toSend > limit) {
                     toSend = limit;
@@ -140,24 +151,26 @@ public class TestThroughputLatency implements AddCallback, Runnable {
                     toSend = sendLimit - sent;
                 }
                 counter += toSend;
+                }*/
+            //for(int i = 0; i < toSend; i++) {
+            final int index = getRandomLedger();
+            LedgerHandle h = lh[index];
+            if (h == null) {
+                LOG.error("Handle " + index + " is null!");
+            } else {
+                long nanoTime = System.nanoTime();
+                lh[index].asyncAddEntry(bytes, this, new Context(sent, nanoTime));
+                counter.incrementAndGet();
             }
-            for(int i = 0; i < toSend; i++) {
-                final int index = getRandomLedger();
-                LedgerHandle h = lh[index];
-                if (h == null) {
-                    LOG.error("Handle " + index + " is null!");
-                } else {
-                    lh[index].asyncAddEntry(bytes, this, new Context(sent, nanoTime));
-                }
-                sent++;
-            }
-            lastNanoTime = nanoTime;
+            sent++;
+                //}
+                //lastNanoTime = nanoTime;
         }
         
         try {
             synchronized (this) {
-                while(this.counter > 0)
-                    wait();
+                while(this.counter.get() > 0)
+                    Thread.sleep(1000);
             }
         } catch(InterruptedException e) {
             e.printStackTrace();
@@ -186,24 +199,36 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         // multiple ledgers, and it works even with one ledger
         entryId = context.id;
         long newTime = System.nanoTime() - context.localStartTime;
-        long tt = -1;
+        /*        long tt = -1;
         long rac = -1;
-        int c = -1;
-        synchronized(this) {
-            runningAverageCounter++;
-            latencies[(int)entryId] = newTime;
-            if (latencyIndex >= entryId) {
-                LOG.error("On entry " + entryId + " ledgerIndex = " + latencyIndex);
-            }
-            latencyIndex = (int)entryId;
-            totalTime += newTime;
-            completions++;
-            tt = totalTime;
-            rac = runningAverageCounter;
-            counter--;
-            c = counter;
-            notify();
-        }
+        int c = -1;*/
+        /*final Semaphore s = sem;
+        Thread t = new Thread() {
+                public void run() {
+                    s.release();
+                }
+            };
+            t.start();*/
+        sem.release();
+        counter.decrementAndGet();
+        //synchronized(this) {
+        //runningAverageCounter++;
+        latencies[(int)entryId] = newTime;
+        //System.out.println("entryId " + entryId + " newTime: " + newTime);
+        //if (latencyIndex >= entryId) {
+        //    LOG.error("On entry " + entryId + " ledgerIndex = " + latencyIndex);
+        //}
+        //latencyIndex = (int)entryId;
+        //totalTime += newTime;
+        //completions++;
+        //tt = totalTime;
+        //rac = runningAverageCounter;
+        //            counter--;
+        //c = counter;
+        //        synchronized(this){
+        //    notify();
+        //}
+        //}
         
         if((entryId % threshold) == (threshold - 1)){
             final long now = System.currentTimeMillis();
@@ -212,13 +237,13 @@ public class TestThroughputLatency implements AddCallback, Runnable {
             double avgLatency = -1;
             //System.out.println("SAMPLE\t" + toOutput + "\t" + diff);
             previous = now;
-            if(rac > 0){
-                avgLatency = ((double)tt/(double)rac)/1000000.0;
-            }
+            //            if(rac > 0){
+            //avgLatency = ((double)tt/(double)rac)/1000000.0;
+            //}
             //runningAverage = 0;
             // totalTime = 0;
             // runningAverageCounter = 0;
-            System.out.println("SAMPLE\t" + toOutput + "\t" + diff + "\t" + avgLatency + "\t" + c);
+            System.out.println("SAMPLE\t" + toOutput + "\t" + diff + "\t" + avgLatency + "\t" + counter.get());
         }
     }
     
@@ -276,7 +301,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         int qSize = Integer.parseInt(args[3]);
         int throttle = Integer.parseInt(args[4]);
         Thread thread;
-        /*
+        
         long lastWarmUpTP = -1;
         long throughput;
         LOG.info("Starting warmup");
@@ -286,12 +311,12 @@ public class TestThroughputLatency implements AddCallback, Runnable {
             // we will just run once, so lets break
             break;
         }
-        */
+        
         
         LOG.info("Warmup phase finished");
         
         // Now do the benchmark
-        TestThroughputLatency ttl = new TestThroughputLatency(paceInNanos, ensemble, qSize, throttle, ledgers, servers);
+        TestThroughputLatency ttl = new TestThroughputLatency(opsPerSec, ensemble, qSize, throttle, ledgers, servers);
         ttl.setEntryData(data);
         thread = new Thread(ttl);
         ZooKeeper zk = null;
@@ -318,30 +343,26 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         Thread.sleep(totalTime);
         thread.interrupt();
         thread.join();
-        long rac = -1;
-        long tt = -1;
-        long cc = -1;
-        synchronized(ttl) {
-            rac = ttl.runningAverageCounter;
-            tt = ttl.totalTime;
-            cc = ttl.completions;
+
+        ArrayList<Long> latency = new ArrayList<Long>();
+        for(int i = 0; i < ttl.latencies.length; i++) {
+            if (ttl.latencies[i] > 0) {
+                latency.add(ttl.latencies[i]);
+            }
         }
-        double tp = (double)cc*1000.0/(double)ttl.getDuration();
+        double tp = (double)latency.size()*1000.0/(double)ttl.getDuration();
+        System.out.println(latency.size() + " completions in " + ttl.getDuration() + " seconds: " + tp + " ops/sec");
+        //        System.out.println("Average latency: " + ((double)tt /(double)rac)/1000000.0);
+
         if (zk != null) {
             zk.create(coordinationZnode + "/worker-", ("tp " + tp + " duration " + ttl.getDuration()).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT_SEQUENTIAL);
         }
-        System.out.println(cc + " completions in " + ttl.getDuration() + " seconds: " + tp + " ops/sec");
-        System.out.println("Average latency: " + ((double)tt /(double)rac)/1000000.0);
-        ArrayList<Long> latency = new ArrayList<Long>();
-        for(int i = 0; i < ttl.latencyIndex; i++) {
-            latency.add(ttl.latencies[i]);
-        }
-        
+
         // dump the latencies for later debugging (it will be sorted by entryid)
         OutputStream fos = new BufferedOutputStream(new FileOutputStream("latencyDump.dat"));
         
         for(Long l: latency) {
-            fos.write((Long.toString(l)+"\n").getBytes());
+            fos.write((Long.toString(l)+"\t"+(l/1000000)+ "ms\n").getBytes());
         }
         fos.flush();
         fos.close();
@@ -383,7 +404,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
             int ledgers, int ensemble, int qSize, int throttle)
             throws KeeperException, IOException, InterruptedException {
         TestThroughputLatency ttl = new TestThroughputLatency(paceInNanos, ensemble, qSize, throttle, ledgers, servers);
-        int limit = ledgers*3;
+        int limit = ensemble*50000;
         if (limit < 50000) {
             limit = 50000;
         }

@@ -22,6 +22,23 @@
 
 # default settings for starting bookkeeper
 
+BOOKIE_ZOOKEEPER=gsbl90151
+
+# Port for bookie to listen on
+#BOOKIE_PORT=
+
+# Directory Bookkeeper outputs its write ahead log
+BOOKIE_TXN_LOGDIR=/grid/1/dev/ivank/bk-journal/bk/logs
+
+# Directory Bookkeeper outputs ledger snapshots
+BOOKIE_DATA_DIR=/grid/3/dev/ivank/bk-journal/bk/data
+
+BOOKIE_LOG_CONF=/homes/ivank/bkbench/log4j.properties
+
+#PROFILE="-agentpath:/homes/ivank/Apps/yjp-9.5.6/bin/linux-x86-32/libyjpagent.so=sampling"
+
+BOOKIE_EXTRA_OPTS="-DopenFileLimit=32000 -Dserver.tcpnodelay=true $PROFILE"
+
 # Zookeeper ensemble for bookkeeper to use
 #BOOKIE_ZOOKEEPER=
 
