@@ -51,7 +51,7 @@ import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
  *
  */
 
-public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback {
+public class BookKeeper {
 
     static final Logger LOG = Logger.getLogger(BookKeeper.class);
 
@@ -147,14 +147,14 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
      * There are 2 digest types that can be used for verification. The CRC32 is
      * cheap to compute but does not protect against byzantine bookies (i.e., a
      * bookie might report fake bytes and a matching CRC32). The MAC code is more
-     * expensive to compute, but is protected by a password, i.e., a bookie can't
-     * report fake bytes with a mathching MAC unless it knows the password
+     * expensive to compute, but is protected by a key, i.e., a bookie can't
+     * report fake bytes with a mathching MAC unless it knows the key
      */
     public enum DigestType {
         MAC, CRC32
     };
 
-    public ZooKeeper getZkHandle() {
+    ZooKeeper getZkHandle() {
         return zk;
     }
 
@@ -163,18 +163,18 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
      *
      * @return BookieClient for the BookKeeper instance.
      */
-    public BookieClient getBookieClient() {
+    BookieClient getBookieClient() {
         return bookieClient;
     }
 
     /**
      * Creates a new ledger asynchronously. To create a ledger, we need to specify
-     * the ensemble size, the quorum size, the digest type, a password, a callback
+     * the ensemble size, the quorum size, the digest type, a key, a callback
      * implementation, and an optional control object. The ensemble size is how
      * many bookies the entries should be striped among and the quorum size is the
      * degree of replication of each entry. The digest type is either a MAC or a
      * CRC. Note that the CRC option is not able to protect a client against a
-     * bookie that replaces an entry. The password is used not only to
+     * bookie that replaces an entry. The key is used not only to
      * authenticate access to a ledger, but also to verify entries in ledgers.
      *
      * @param ensSize
@@ -183,53 +183,36 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
      *          quorum size
      * @param digestType
      *          digest type, either MAC or CRC32
-     * @param passwd
-     *          password
+     * @param key
+     *          key
      * @param cb
      *          createCallback implementation
      * @param ctx
      *          optional control object
      */
     public void asyncCreateLedger(int ensSize, int qSize, DigestType digestType,
-                                  byte[] passwd, CreateCallback cb, Object ctx) {
+                                  byte[] key, CreateCallback cb, Object ctx) {
 
-        new LedgerCreateOp(this, ensSize, qSize, digestType, passwd, cb, ctx)
+        new LedgerCreateOp(this, ensSize, qSize, digestType, key, cb, ctx)
         .initiate();
 
     }
 
-    /**
-     * Create callback implementation for synchronous create call.
-     *
-     * @param rc
-     *          return code
-     * @param lh
-     *          ledger handle object
-     * @param ctx
-     *          optional control object
-     */
-    public void createComplete(int rc, LedgerHandle lh, Object ctx) {
-        SyncCounter counter = (SyncCounter) ctx;
-        counter.setLh(lh);
-        counter.setrc(rc);
-        counter.dec();
-    }
 
     /**
      * Creates a new ledger. Default of 3 servers, and quorum of 2 servers.
      *
      * @param digestType
      *          digest type, either MAC or CRC32
-     * @param passwd
-     *          password
+     * @param key
+     *          key
      * @return
-     * @throws KeeperException
      * @throws InterruptedException
      * @throws BKException
      */
-    public LedgerHandle createLedger(DigestType digestType, byte passwd[])
-            throws KeeperException, BKException, InterruptedException, IOException {
-        return createLedger(3, 2, digestType, passwd);
+    public LedgerHandle createLedger(DigestType digestType, byte key[])
+            throws BKException, InterruptedException {
+        return createLedger(3, 2, digestType, key);
     }
 
     /**
@@ -239,22 +222,21 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
      * @param ensSize
      * @param qSize
      * @param digestType
-     * @param passwd
+     * @param key
      * @return
-     * @throws KeeperException
      * @throws InterruptedException
-     * @throws IOException
      * @throws BKException
      */
     public LedgerHandle createLedger(int ensSize, int qSize,
-                                     DigestType digestType, byte passwd[]) throws KeeperException,
-        InterruptedException, IOException, BKException {
+                                     DigestType digestType, byte key[]) 
+            throws InterruptedException, BKException {
         SyncCounter counter = new SyncCounter();
         counter.inc();
         /*
          * Calls asynchronous version
          */
-        asyncCreateLedger(ensSize, qSize, digestType, passwd, this, counter);
+        asyncCreateLedger(ensSize, qSize, digestType, key, 
+                          new SyncCreateCallback(), counter);
 
         /*
          * Wait
@@ -275,15 +257,15 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
      *          ledger identifier
      * @param digestType
      *          digest type, either MAC or CRC32
-     * @param passwd
-     *          password
+     * @param key
+     *          key
      * @param ctx
      *          optional control object
      */
-    public void asyncOpenLedger(long lId, DigestType digestType, byte passwd[],
+    public void asyncOpenLedger(long lId, DigestType digestType, byte key[],
                                 OpenCallback cb, Object ctx) {
 
-        new LedgerOpenOp(this, lId, digestType, passwd, false, cb, ctx).initiate();
+        new LedgerOpenOp(this, lId, digestType, key, false, cb, ctx).initiate();
 
     }
 
@@ -299,38 +281,19 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
      *          ledger identifier
      * @param digestType
      *          digest type, either MAC or CRC32
-     * @param passwd
-     *          password
+     * @param key
+     *          key
      * @param ctx
      *          optional control object
      */
 
-    public void asyncOpenLedgerNoRecovery(long lId, DigestType digestType, byte passwd[],
+    public void asyncOpenLedgerNoRecovery(long lId, DigestType digestType, byte key[],
                                           OpenCallback cb, Object ctx) {
 
-        new LedgerOpenOp(this, lId, digestType, passwd, true, cb, ctx).initiate();
+        new LedgerOpenOp(this, lId, digestType, key, true, cb, ctx).initiate();
 
     }
 
-    /**
-     * Callback method for synchronous open operation
-     *
-     * @param rc
-     *          return code
-     * @param lh
-     *          ledger handle
-     * @param ctx
-     *          optional control object
-     */
-    public void openComplete(int rc, LedgerHandle lh, Object ctx) {
-        SyncCounter counter = (SyncCounter) ctx;
-        counter.setLh(lh);
-
-        LOG.debug("Open complete: " + rc);
-
-        counter.setrc(rc);
-        counter.dec();
-    }
 
     /**
      * Synchronous open ledger call
@@ -339,14 +302,14 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
      *          ledger identifier
      * @param digestType
      *          digest type, either MAC or CRC32
-     * @param passwd
-     *          password
+     * @param key
+     *          key
      * @return
      * @throws InterruptedException
      * @throws BKException
      */
 
-    public LedgerHandle openLedger(long lId, DigestType digestType, byte passwd[])
+    public LedgerHandle openLedger(long lId, DigestType digestType, byte key[])
             throws BKException, InterruptedException {
         SyncCounter counter = new SyncCounter();
         counter.inc();
@@ -354,7 +317,8 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
         /*
          * Calls async open ledger
          */
-        asyncOpenLedger(lId, digestType, passwd, this, counter);
+        asyncOpenLedger(lId, digestType, key, 
+                        new SyncOpenCallback(), counter);
 
         /*
          * Wait
@@ -373,14 +337,14 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
      *          ledger identifier
      * @param digestType
      *          digest type, either MAC or CRC32
-     * @param passwd
-     *          password
+     * @param key
+     *          key
      * @return
      * @throws InterruptedException
      * @throws BKException
      */
 
-    public LedgerHandle openLedgerNoRecovery(long lId, DigestType digestType, byte passwd[])
+    public LedgerHandle openLedgerNoRecovery(long lId, DigestType digestType, byte key[])
             throws BKException, InterruptedException {
         SyncCounter counter = new SyncCounter();
         counter.inc();
@@ -388,7 +352,8 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
         /*
          * Calls async open ledger
          */
-        asyncOpenLedgerNoRecovery(lId, digestType, passwd, this, counter);
+        asyncOpenLedgerNoRecovery(lId, digestType, key, 
+                                  new SyncOpenCallback(), counter);
 
         /*
          * Wait
@@ -414,19 +379,6 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
         new LedgerDeleteOp(this, lId, cb, ctx).initiate();
     }
 
-    /**
-     * Delete callback implementation for synchronous delete call.
-     *
-     * @param rc
-     *            return code
-     * @param ctx
-     *            optional control object
-     */
-    public void deleteComplete(int rc, Object ctx) {
-        SyncCounter counter = (SyncCounter) ctx;
-        counter.setrc(rc);
-        counter.dec();
-    }
 
     /**
      * Synchronous call to delete a ledger. Parameters match those of
@@ -441,7 +393,7 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
         SyncCounter counter = new SyncCounter();
         counter.inc();
         // Call asynchronous version
-        asyncDeleteLedger(lId, this, counter);
+        asyncDeleteLedger(lId, new SyncDeleteCallback(), counter);
         // Wait
         counter.block(0);
         if (counter.getrc() != KeeperException.Code.OK.intValue()) {
@@ -454,7 +406,7 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
      * Shuts down client.
      *
      */
-    public void halt() throws InterruptedException {
+    public void close() throws InterruptedException, BKException {
         bookieClient.close();
         bookieWatcher.halt();
         if (ownChannelFactory) {
@@ -466,4 +418,64 @@ public class BookKeeper implements OpenCallback, CreateCallback, DeleteCallback 
         callbackWorker.shutdown();
         mainWorkerPool.shutdown();
     }
+
+    private static class SyncCreateCallback implements CreateCallback {
+        /**
+         * Create callback implementation for synchronous create call.
+         *
+         * @param rc
+         *          return code
+         * @param lh
+         *          ledger handle object
+         * @param ctx
+         *          optional control object
+         */
+        public void createComplete(int rc, LedgerHandle lh, Object ctx) {
+            SyncCounter counter = (SyncCounter) ctx;
+            counter.setLh(lh);
+            counter.setrc(rc);
+            counter.dec();
+        }
+    }
+
+    private static class SyncOpenCallback implements OpenCallback {
+        /**
+         * Callback method for synchronous open operation
+         *
+         * @param rc
+         *          return code
+         * @param lh
+         *          ledger handle
+         * @param ctx
+         *          optional control object
+         */
+        public void openComplete(int rc, LedgerHandle lh, Object ctx) {
+            SyncCounter counter = (SyncCounter) ctx;
+            counter.setLh(lh);
+            
+            LOG.debug("Open complete: " + rc);
+            
+            counter.setrc(rc);
+            counter.dec();
+        }
+    }
+
+    private static class SyncDeleteCallback implements DeleteCallback {
+        /**
+         * Delete callback implementation for synchronous delete call.
+         *
+         * @param rc
+         *            return code
+         * @param ctx
+         *            optional control object
+         */
+        public void deleteComplete(int rc, Object ctx) {
+            SyncCounter counter = (SyncCounter) ctx;
+            counter.setrc(rc);
+            counter.dec();
+        }
+    }
+
+
+
 }

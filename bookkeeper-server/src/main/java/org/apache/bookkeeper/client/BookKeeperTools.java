@@ -1,4 +1,4 @@
-package org.apache.bookkeeper.tools;
+package org.apache.bookkeeper.client;
 
 /*
  *
@@ -128,8 +128,8 @@ public class BookKeeperTools {
      *             if there is an error shutting down the clients that this
      *             class uses.
      */
-    public void shutdown() throws InterruptedException {
-        bkc.halt();
+    public void shutdown() throws InterruptedException, BKException {
+        bkc.close();
         zk.close();
     }
 
@@ -728,7 +728,7 @@ public class BookKeeperTools {
      * @throws IOException
      * @throws KeeperException
      */
-    public static void main(String[] args) throws InterruptedException, IOException, KeeperException {
+    public static void main(String[] args) throws InterruptedException, IOException, KeeperException, BKException {
         // Validate the inputs
         if (args.length < 2) {
             System.err.println("USAGE: BookKeeperTools zkServers bookieSrc [bookieDest]");
