@@ -33,6 +33,8 @@
 #include <tr1/unordered_map>
 #endif
 
+#include <queue>
+
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 
 #include <boost/shared_ptr.hpp>
@@ -73,6 +75,23 @@ namespace Hedwig {
 
   typedef boost::shared_ptr<ChannelHandler> ChannelHandlerPtr;
 
+
+  class MessageHandlerThread {
+  public:
+    MessageHandlerThread(DuplexChannel* channel);
+
+    void handleMessage(PubSubResponsePtr msg);
+    void run();
+
+    void stop();
+  private:
+    bool running;
+    DuplexChannel* channel;
+    boost::mutex queue_lock;
+    boost::condition_variable queue_cond;
+    std::queue<PubSubResponsePtr> queue;
+    boost::thread* thread;
+  };
 
   class DuplexChannel : public boost::enable_shared_from_this<DuplexChannel> {
   public:
@@ -139,8 +158,11 @@ namespace Hedwig {
     boost::shared_mutex state_lock;
 
     bool receiving;
+    bool stopAfterReceiving;
     boost::mutex receiving_lock;
-    
+    boost::condition_variable receiving_cond;
+    MessageHandlerThread* msg_handler;
+
     bool sending;
     boost::mutex sending_lock;
 
@@ -149,6 +171,8 @@ namespace Hedwig {
     TransactionMap txnid2data;
     boost::mutex txnid2data_lock;
     boost::shared_mutex destruction_lock;
+    
+    friend class MessageHandlerThread;
   };
   
 

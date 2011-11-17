@@ -52,9 +52,12 @@ DuplexChannel::DuplexChannel(EventDispatcher& dispatcher, const HostAddress& add
 			     const Configuration& cfg, const ChannelHandlerPtr& handler)
   : dispatcher(dispatcher), address(addr), handler(handler), 
     socket(dispatcher.getService()), instream(&in_buf), copy_buf(NULL), copy_buf_length(0),
-    state(UNINITIALISED), receiving(false), sending(false)
+    state(UNINITIALISED), receiving(false), stopAfterReceiving(false), 
+
+    sending(false)
 {
   LOG4CXX_DEBUG(logger, "Creating DuplexChannel(" << this << ")");
+  msg_handler = new MessageHandlerThread(this);
 }
 
 /*static*/ void DuplexChannel::connectCallbackHandler(DuplexChannelPtr channel,
@@ -133,18 +136,15 @@ void DuplexChannel::connect() {
 		  << " bytes left in buffer");
   }
 
-  ChannelHandlerPtr h;
-  {
-    boost::shared_lock<boost::shared_mutex> lock(channel->destruction_lock);
-    if (channel->handler.get()) {
-      h = channel->handler;
-    }
-  }
-  if (h.get()) {
-    h->messageReceived(channel, response);
-  }
+  channel->msg_handler->handleMessage(response);
 
-  DuplexChannel::readSize(channel);
+  if (channel->stopAfterReceiving) {
+    boost::lock_guard<boost::mutex> lock(channel->receiving_lock);
+    channel->receiving = false;
+    channel->receiving_cond.notify_one();
+  } else {
+    DuplexChannel::readSize(channel);
+  }
 }
 
 /*static*/ void DuplexChannel::sizeReadCallbackHandler(DuplexChannelPtr channel, 
@@ -229,8 +229,13 @@ bool DuplexChannel::isReceiving() {
 void DuplexChannel::stopReceiving() {
   LOG4CXX_DEBUG(logger, "DuplexChannel::stopReceiving channel(" << this << ")");
   
-  boost::lock_guard<boost::mutex> lock(receiving_lock);
-  receiving = false;
+  boost::unique_lock<boost::mutex> lock(receiving_lock);
+  stopAfterReceiving = true;
+  while (receiving) {
+    receiving_cond.wait(lock);
+  }
+  stopAfterReceiving = false;
+  //receiving = false;
 }
 
 void DuplexChannel::startSending() {
@@ -325,6 +330,9 @@ void DuplexChannel::kill() {
     socket.close();
   }
   handler = ChannelHandlerPtr(); // clear the handler in case it ever referenced the channel*/
+
+  msg_handler->stop();
+  delete msg_handler;
 }
 
 DuplexChannel::~DuplexChannel() {
@@ -424,3 +432,52 @@ void DuplexChannel::setState(State s) {
   boost::lock_guard<boost::shared_mutex> lock(state_lock);
   state = s;
 }
+
+void MessageHandlerThreadFunc(MessageHandlerThread* self) {
+  self->run();
+}
+
+MessageHandlerThread::MessageHandlerThread(DuplexChannel* channel)
+  : running(true), channel(channel) {
+  thread = new boost::thread(MessageHandlerThreadFunc, this);
+}
+
+void MessageHandlerThread::handleMessage(PubSubResponsePtr msg) {
+  boost::lock_guard<boost::mutex> lock(queue_lock);
+  queue.push(msg);
+  queue_cond.notify_one();
+}
+
+void MessageHandlerThread::run() {
+  while (running) {
+    {
+      boost::unique_lock<boost::mutex> lock(queue_lock);
+      while (queue.size() == 0) {
+	queue_cond.wait(lock);
+      }
+    }
+    if (!running) {
+      break;
+    }
+    ChannelHandlerPtr h;
+    {
+      boost::shared_lock<boost::shared_mutex> lock(channel->destruction_lock);
+      if (channel->handler.get()) {
+	h = channel->handler;
+      }
+    }
+    
+    if (h.get()) {
+      PubSubResponsePtr response = queue.front();
+      h->messageReceived(channel->shared_from_this(), response);
+    }
+  }
+}
+
+void MessageHandlerThread::stop() {
+  running = false;
+  queue_cond.notify_one();
+
+  thread->join();
+}
+    
