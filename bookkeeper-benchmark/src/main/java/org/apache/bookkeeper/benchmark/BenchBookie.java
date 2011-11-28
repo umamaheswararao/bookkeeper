@@ -4,8 +4,10 @@ import java.net.InetSocketAddress;
 import java.util.concurrent.Executors;
 
 import org.apache.bookkeeper.proto.BookieClient;
+import org.apache.bookkeeper.proto.BookieProtocol;
 import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.WriteCallback;
 import org.apache.bookkeeper.util.OrderedSafeExecutor;
+import org.apache.bookkeeper.conf.ClientConfiguration;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
@@ -68,8 +70,9 @@ public class BenchBookie {
         ClientSocketChannelFactory channelFactory = new NioClientSocketChannelFactory(Executors.newCachedThreadPool(), Executors
                 .newCachedThreadPool());
         OrderedSafeExecutor executor = new OrderedSafeExecutor(1);
-       
-        BookieClient bc = new BookieClient(channelFactory, executor);
+        
+        ClientConfiguration conf = new ClientConfiguration();
+        BookieClient bc = new BookieClient(conf, channelFactory, executor);
         LatencyCallback lc = new LatencyCallback();
         
         ThroughputCallback tc = new ThroughputCallback();
@@ -81,7 +84,8 @@ public class BenchBookie {
             toSend.writeLong(1);
             toSend.writeLong(entry);
             toSend.writerIndex(toSend.capacity());
-            bc.addEntry(new InetSocketAddress(addr, port), 1, new byte[20], entry, toSend, tc, null);
+            bc.addEntry(new InetSocketAddress(addr, port), 1, new byte[20], 
+                        entry, toSend, tc, null, BookieProtocol.FLAG_NONE);
         }
         System.err.println("Waiting for warmup");
         tc.waitFor(warmUpCount);
@@ -97,7 +101,8 @@ public class BenchBookie {
             toSend.writeLong(entry);
             toSend.writerIndex(toSend.capacity());
             lc.resetComplete();
-            bc.addEntry(new InetSocketAddress(addr, port), 2, new byte[20], entry, toSend, lc, null);
+            bc.addEntry(new InetSocketAddress(addr, port), 2, new byte[20], 
+                        entry, toSend, lc, null, BookieProtocol.FLAG_NONE);
             lc.waitForComplete();
         }
         long endTime = System.nanoTime();
@@ -114,7 +119,8 @@ public class BenchBookie {
             toSend.writeLong(3);
             toSend.writeLong(entry);
             toSend.writerIndex(toSend.capacity());
-            bc.addEntry(new InetSocketAddress(addr, port), 3, new byte[20], entry, toSend, tc, null);
+            bc.addEntry(new InetSocketAddress(addr, port), 3, new byte[20], 
+                        entry, toSend, tc, null, BookieProtocol.FLAG_NONE);
             // throttel at 5000
             tc.waitFor((int)entry-5000);
         }

@@ -17,7 +17,6 @@ import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.AsyncCallback.AddCallback;
-import org.apache.bookkeeper.util.MainUtil;
 import org.apache.log4j.Logger;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
@@ -80,11 +79,11 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     }
     
     Random rand = new Random();
-    public void close() throws InterruptedException {
+    public void close() throws InterruptedException, BKException {
         for(int i = 0; i < numberOfLedgers; i++) {
             lh[i].close();
         }
-        bk.halt();
+        bk.close();
     }
     
     long previous = 0;
@@ -272,7 +271,6 @@ public class TestThroughputLatency implements AddCallback, Runnable {
             coordinationZnode = args[8];
         }
     
-        MainUtil.outputInitInfo();
         long runningTime = Long.parseLong(args[0]);
         String servers = args[7];
         LOG.warn("(Parameters received) running time: " + args[0] + 
