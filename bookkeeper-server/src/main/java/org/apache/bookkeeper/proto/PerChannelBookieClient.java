@@ -67,7 +67,8 @@ import org.jboss.netty.handler.codec.frame.TooLongFrameException;
 public class PerChannelBookieClient extends SimpleChannelHandler implements ChannelPipelineFactory {
 
     static final Logger LOG = LoggerFactory.getLogger(PerChannelBookieClient.class);
-
+    static final Logger LOG2 = LoggerFactory.getLogger("LatencyTrace");
+    final String latencyTraceFormat;
     static final long maxMemory = Runtime.getRuntime().maxMemory() / 5;
     public static int MAX_FRAME_LENGTH = 2 * 1024 * 1024; // 2M
 
@@ -107,6 +108,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         this.totalBytesOutstanding = totalBytesOutstanding;
         this.channelFactory = channelFactory;
         this.state = ConnectionState.DISCONNECTED;
+        this.latencyTraceFormat = "Client(" + addr.toString() + ") latency {} ns";
     }
 
     synchronized private void connect() {
@@ -372,9 +374,13 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
      * are carried out in this class, e.g., making sense of received messages,
      * prepending the length to outgoing packets etc.
      */
+    private org.jboss.netty.util.Timer timer;
     @Override
     public ChannelPipeline getPipeline() throws Exception {
         ChannelPipeline pipeline = Channels.pipeline();
+        timer = new org.jboss.netty.util.HashedWheelTimer();
+
+        //        pipeline.addLast("readTimeout", new org.jboss.netty.handler.timeout.ReadTimeoutHandler(timer, 5));
         pipeline.addLast("lengthbasedframedecoder", new LengthFieldBasedFrameDecoder(MAX_FRAME_LENGTH, 0, 4, 0, 4));
         pipeline.addLast("mainhandler", this);
         return pipeline;
@@ -388,6 +394,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         LOG.info("Disconnected from bookie: " + addr);
         errorOutOutstandingEntries();
         channel.close();
+        timer.stop();
 
         state = ConnectionState.DISCONNECTED;
 
@@ -407,7 +414,13 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
                       + e.getChannel().getRemoteAddress());
             return;
         }
+
+        if (t instanceof org.jboss.netty.handler.timeout.ReadTimeoutException) {
+            ctx.getChannel().disconnect();
+            return;
+        }
         if (t instanceof IOException) {
+            LOG.error("failure {}", t);
             // these are thrown when a bookie fails, logging them just pollutes
             // the logs (the failure is logged from the listeners on the write
             // operation), so I'll just ignore it here.
@@ -489,6 +502,7 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
 
         AddCompletion ac;
         ac = addCompletions.remove(new CompletionKey(ledgerId, entryId));
+        //        ac.log(latencyTraceFormat);
         if (ac == null) {
             LOG.error("Unexpected add response received from bookie: " + addr + " for ledger: " + ledgerId
                       + ", entry: " + entryId + " , ignoring");
@@ -563,11 +577,17 @@ public class PerChannelBookieClient extends SimpleChannelHandler implements Chan
         final WriteCallback cb;
         //final long size;
         final Object ctx;
+        //        final long start;
 
         public AddCompletion(WriteCallback cb, long size, Object ctx) {
             this.cb = cb;
             //this.size = size;
             this.ctx = ctx;
+            //            this.start = System.nanoTime();
+        }
+
+        public void log(String format) {
+            //            LOG2.trace(format, System.nanoTime() - start);
         }
     }
     

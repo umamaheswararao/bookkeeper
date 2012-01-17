@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.Queue;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.bookkeeper.client.AsyncCallback.ReadLastConfirmedCallback;
 import org.apache.bookkeeper.client.BKException;
@@ -61,7 +62,7 @@ public class LedgerHandle {
     LedgerMetadata metadata;
     final BookKeeper bk;
     final long ledgerId;
-    long lastAddPushed;
+    AtomicLong lastAddPushed;
     long lastAddConfirmed;
     long length;
     final DigestManager macManager;
@@ -79,10 +80,12 @@ public class LedgerHandle {
         this.metadata = metadata;
 
         if (metadata.isClosed()) {
-            lastAddConfirmed = lastAddPushed = metadata.close;
+            lastAddConfirmed = metadata.close;
+            lastAddPushed = new AtomicLong(metadata.close);
             length = metadata.length;
         } else {
-            lastAddConfirmed = lastAddPushed = -1;
+            lastAddConfirmed = -1;
+            lastAddPushed = new AtomicLong(-1);
             length = 0;
         }
 
@@ -122,7 +125,7 @@ public class LedgerHandle {
      * @return
      */
     public long getLastAddPushed() {
-        return lastAddPushed;
+        return lastAddPushed.get();
     }
 
     /**
@@ -255,7 +258,7 @@ public class LedgerHandle {
 
                 metadata.close(lastAddConfirmed);
                 errorOutPendingAdds(rc);
-                lastAddPushed = lastAddConfirmed;
+                lastAddPushed.set(lastAddConfirmed);
 
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("Closing ledger: " + ledgerId + " at entryId: "
@@ -431,6 +434,7 @@ public class LedgerHandle {
                 "Invalid values for offset("+offset
                 +") or length("+length+")");
         }
+
         try {
             opCounterSem.acquire();
         } catch (InterruptedException e) {
@@ -439,26 +443,34 @@ public class LedgerHandle {
         }
 
         try {
-            bk.mainWorkerPool.submitOrdered(ledgerId, new SafeRunnable() {
-                @Override
-                public void safeRun() {
-                    if (metadata.isClosed()) {
-                        LOG.warn("Attempt to add to closed ledger: " + ledgerId);
-                        LedgerHandle.this.opCounterSem.release();
-                        cb.addComplete(BKException.Code.LedgerClosedException,
-                                       LedgerHandle.this, -1, ctx);
-                        return;
-                    }
+            if (metadata.isClosed()) {
+                LOG.warn("Attempt to add to closed ledger: " + ledgerId);
+                LedgerHandle.this.opCounterSem.release();
+                cb.addComplete(BKException.Code.LedgerClosedException,
+                        LedgerHandle.this, -1, ctx);
+                return;
+            }
+            
+            long entryId1 = 0;
+            long currentLength1 = 0;
 
-                    long entryId = ++lastAddPushed;
-                    long currentLength = addToLength(length);
-                    op.setEntryId(entryId);
-                    pendingAddOps.add(op);
-                    ChannelBuffer toSend = macManager.computeDigestAndPackageForSending(
-                                               entryId, lastAddConfirmed, currentLength, data, offset, length);
-                    op.initiate(toSend);
-                }
-            });
+            synchronized (lastAddPushed) {
+                entryId1 = lastAddPushed.incrementAndGet();
+                currentLength1 = addToLength(length);
+                op.setEntryId(entryId1);
+                pendingAddOps.add(op);
+            }
+            final long entryId = entryId1;
+            final long currentLength = currentLength1;
+            bk.mainWorkerPool.submit(new SafeRunnable() {
+                    @Override
+                    public void safeRun() {
+                        
+                        ChannelBuffer toSend = macManager.computeDigestAndPackageForSending(
+                                entryId, lastAddConfirmed, currentLength, data, offset, length);
+                        op.initiate(toSend);
+                    }
+                });
         } catch (RuntimeException e) {
             opCounterSem.release();
             throw e;
@@ -632,7 +644,8 @@ public class LedgerHandle {
 
     void recover(final GenericCallback<Void> cb) {
         if (metadata.isClosed()) {
-            lastAddConfirmed = lastAddPushed = metadata.close;
+            lastAddConfirmed = metadata.close;
+            lastAddPushed.set(metadata.close);
             length = metadata.length;
 
             // We are already closed, nothing to do

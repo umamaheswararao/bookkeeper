@@ -109,7 +109,7 @@ OPTS="-cp $BOOKIE_CLASSPATH $OPTS $BOOKIE_EXTRA_OPTS"
 OPTS="$OPTS $BOOKIE_EXTRA_OPTS"
 
 if [ $COMMAND == "bookie" ]; then
-    exec java $OPTS org.apache.bookkeeper.proto.BookieServer --conf $BOOKIE_CONF $@
+    exec java -Xmx8G $OPTS org.apache.bookkeeper.proto.BookieServer --conf $BOOKIE_CONF $@
 elif [ $COMMAND == "localbookie" ]; then
     NUMBER=$1
     shift
@@ -117,6 +117,8 @@ elif [ $COMMAND == "localbookie" ]; then
 elif [ $COMMAND == "help" ]; then
     bookkeeper_help;
 else
-    exec java $OPTS $COMMAND $@
+# -agentpath:/homes/ivank/Apps/yjp-9.5.6/bin/linux-x86-64/libyjpagent.so=sampling
+#-agentpath:/homes/ivank/Apps/yjp-9.5.6/bin/linux-x86-64/libyjpagent.so=monitors
+    exec java  -Xmx4G  $OPTS $COMMAND $@
 fi
 

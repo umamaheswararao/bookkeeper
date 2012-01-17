@@ -14,6 +14,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.bookkeeper.client.BKException;
+import org.apache.bookkeeper.conf.ClientConfiguration;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.AsyncCallback.AddCallback;
@@ -37,7 +38,8 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     int pace;
     int throttle;
     int numberOfLedgers = 1;
-    
+    final String servers;
+
     class Context {
         long localStartTime;
         long globalStartTime;
@@ -53,25 +55,32 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     throws KeeperException, 
         IOException, 
         InterruptedException {
+
         this.sem = new Semaphore(pace);
         this.pace = pace;
         System.setProperty("throttle", Integer.toString(100000));
         this.throttle = throttle;
-        bk = new BookKeeper(servers);
+        ClientConfiguration conf = new ClientConfiguration();
+        conf.setZkServers(servers);
+        this.servers = servers;
+        //        conf.setClientTcpNoDelay(false);
+
+        bk = new BookKeeper(conf);
         this.counter = new AtomicLong(0);
         this.numberOfLedgers = numberOfLedgers;
         try{
-            LedgerHandle warmup = bk.createLedger(6, 6, BookKeeper.DigestType.CRC32, new byte[] {'a', 'b'});
+            /*            LedgerHandle warmup = bk.createLedger(6, 6, BookKeeper.DigestType.CRC32, new byte[] {'a', 'b'});
             byte[] data = new byte[128];
             for (int i = 0; i < 100000; i++) {
                 warmup.addEntry(data);
             }
             warmup.close();
-
+            */
             //System.setProperty("throttle", throttle.toString());
             lh = new LedgerHandle[this.numberOfLedgers];
             for(int i = 0; i < this.numberOfLedgers; i++) {
                 lh[i] = bk.createLedger(ensemble, qSize, BookKeeper.DigestType.CRC32, new byte[] {'a', 'b'});
+                System.out.println("Ledger Handle: " + lh[i].getId());
             }
         } catch (BKException e) {
             e.printStackTrace();
@@ -103,6 +112,8 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     int sendLimit = 2000000;
     long latencies[] = new long[sendLimit];
     int latencyIndex = -1;
+    AtomicLong completedRequests = new AtomicLong(0);
+
     public void setSendLimit(int sendLimit) {
         this.sendLimit = sendLimit;
         latencies = new long[sendLimit];
@@ -112,6 +123,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
     synchronized public long getDuration() {
         return duration;
     }
+
     public void run() {
         LOG.info("Running...");
         long start = previous = System.currentTimeMillis();
@@ -120,6 +132,23 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         //long lastNanoTime = System.nanoTime();
         byte messageCount = 0;
         int sent = 0;
+
+        Thread reporter = new Thread() {
+                public void run() {
+                    try {
+                        while(true) {
+                            Thread.sleep(200);
+                            System.out.println("ms: " + System.currentTimeMillis()
+                                               + " req: " + completedRequests.getAndSet(0));
+                        }
+                    } catch (InterruptedException ie) {
+                        System.out.println("Caught interrupted exception, going away");
+                    }
+                }
+            };
+        reporter.start();
+        long beforeSend = System.nanoTime();
+        
         while(!Thread.currentThread().isInterrupted() && sent < sendLimit) {
             /*if (paceInNanos > 0) {
                 try {
@@ -130,6 +159,14 @@ public class TestThroughputLatency implements AddCallback, Runnable {
                 }*/
             try {
                 sem.acquire();
+                if (sent == 10000) {
+                    long afterSend = System.nanoTime();
+                    long time = afterSend - beforeSend;
+                    System.out.println("Time to send first batch: " 
+                                       + time/1000/1000/1000 + "s "
+                                       + time/1000/1000 + "ms "
+                                       + time + "ns ");
+                }
             } catch (InterruptedException e) {
                 break;
             }
@@ -165,7 +202,7 @@ public class TestThroughputLatency implements AddCallback, Runnable {
                 //}
                 //lastNanoTime = nanoTime;
         }
-        
+        System.out.println("Sent: "  + sent);
         try {
             synchronized (this) {
                 while(this.counter.get() > 0)
@@ -179,6 +216,12 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         }
         throughput = sent*1000/duration;
         LOG.info("Finished processing in ms: " + duration + " tp = " + throughput);
+        reporter.interrupt();
+        try {
+            reporter.join();
+        } catch (InterruptedException ie) {
+            // ignore
+        }
         System.out.flush();
     }
     
@@ -229,21 +272,22 @@ public class TestThroughputLatency implements AddCallback, Runnable {
         //}
         //}
         
-        if((entryId % threshold) == (threshold - 1)){
-            final long now = System.currentTimeMillis();
-            long diff = now - previous;
-            long toOutput = entryId + 1;
-            double avgLatency = -1;
+        completedRequests.incrementAndGet();
+        //        if((entryId % threshold) == (threshold - 1)){
+        //    final long now = System.currentTimeMillis();
+        //    long diff = now - previous;
+        //    long toOutput = entryId + 1;
+        //    double avgLatency = -1;
             //System.out.println("SAMPLE\t" + toOutput + "\t" + diff);
-            previous = now;
+        //    previous = now;
             //            if(rac > 0){
             //avgLatency = ((double)tt/(double)rac)/1000000.0;
             //}
             //runningAverage = 0;
             // totalTime = 0;
             // runningAverageCounter = 0;
-            System.out.println("SAMPLE\t" + toOutput + "\t" + diff + "\t" + avgLatency + "\t" + counter.get());
-        }
+        //    System.out.println("SAMPLE\t" + toOutput + "\t" + diff + "\t" + avgLatency + "\t" + counter.get());
+        //}
     }
     
     /**
