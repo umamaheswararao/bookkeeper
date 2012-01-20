@@ -111,7 +111,8 @@ class LedgerRecoveryOp implements ReadEntryCallback, ReadCallback, AddCallback {
         // other return codes dont count as valid responses
         if (heardValidResponse && lh.distributionSchedule.canProceedWithRecovery(bookieIndex)) {
             proceedingWithRecovery = true;
-            lh.lastAddPushed = lh.lastAddConfirmed = maxAddConfirmed;
+            lh.lastAddPushed.set(maxAddConfirmed);
+	    lh.lastAddConfirmed = maxAddConfirmed;
             lh.length = maxLength;
             doRecoveryRead();
             return;

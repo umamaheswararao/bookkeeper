@@ -157,7 +157,8 @@ class LedgerOpenOp implements DataCallback {
                     if (rc != BKException.Code.OK) {
                         cb.openComplete(BKException.Code.ReadException, null, LedgerOpenOp.this.ctx);
                     } else {
-                        lh.lastAddConfirmed = lh.lastAddPushed = lastConfirmed;
+                        lh.lastAddConfirmed = lastConfirmed;
+			lh.lastAddPushed.set(lastConfirmed);
                         cb.openComplete(BKException.Code.OK, lh, LedgerOpenOp.this.ctx);
                     }
                 }

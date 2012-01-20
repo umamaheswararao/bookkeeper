@@ -329,7 +329,7 @@ public class Bookie extends Thread {
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("Relay journal - ledger id : " + ledgerId);
                 }
-                LedgerDescriptor handle = getHandle(ledgerId, false);
+                LedgerDescriptor handle = getHandle(ledgerId);
                 try {
                     recBuff.rewind();
                     handle.addEntry(recBuff);
@@ -565,73 +565,38 @@ public class Bookie extends Thread {
         }
     }
 
-    private LedgerDescriptor getHandle(long ledgerId, boolean readonly, byte[] masterKey) throws IOException {
+    private LedgerDescriptor getHandle(long ledgerId, boolean readonly, byte[] masterKey) 
+            throws IOException, BookieException {
         LedgerDescriptor handle = null;
         synchronized (ledgers) {
             handle = ledgers.get(ledgerId);
             if (handle == null) {
-                FileInfo fi = null;
-                try {
-                    // get file info will throw NoLedgerException
-                    fi = ledgerCache.getFileInfo(ledgerId, !readonly);
-
-                    // if an existed ledger index file, we can get its master key
-                    // if an new created ledger index file, we will get a null master key
-                    byte[] existingMasterKey = fi.readMasterKey();
-                    ByteBuffer masterKeyToSet = ByteBuffer.wrap(masterKey);
-                    if (existingMasterKey == null) {
-                        // no master key set before
-                        fi.writeMasterKey(masterKey);
-                    } else if (!masterKeyToSet.equals(ByteBuffer.wrap(existingMasterKey))) {
-                        throw new IOException("Wrong master key for ledger " + ledgerId);
-                    }
-                    handle = createHandle(ledgerId, readonly);
-                    ledgers.put(ledgerId, handle);
-                    handle.setMasterKey(masterKeyToSet);
-                } finally {
-                    if (fi != null) {
-                        fi.release();
-                    }
+                if (readonly) {
+                    throw new NoLedgerException(ledgerId);
                 }
+                handle = createHandle(ledgerId);
+                handle.checkAccess(readonly, masterKey);
+                ledgers.put(ledgerId, handle);
             }
             handle.incRef();
         }
         return handle;
     }
 
-    private LedgerDescriptor getHandle(long ledgerId, boolean readonly) throws IOException {
+    private LedgerDescriptor getHandle(long ledgerId) throws IOException {
         LedgerDescriptor handle = null;
         synchronized (ledgers) {
             handle = ledgers.get(ledgerId);
             if (handle == null) {
-                FileInfo fi = null;
-                try {
-                    // get file info will throw NoLedgerException
-                    fi = ledgerCache.getFileInfo(ledgerId, !readonly);
-
-                    // if an existed ledger index file, we can get its master key
-                    // if an new created ledger index file, we will get a null master key
-                    byte[] existingMasterKey = fi.readMasterKey();
-                    if (existingMasterKey == null) {
-                        throw new IOException("Weird! No master key found in ledger " + ledgerId);
-                    }
-
-                    handle = createHandle(ledgerId, readonly);
-                    ledgers.put(ledgerId, handle);
-                    handle.setMasterKey(ByteBuffer.wrap(existingMasterKey));
-                } finally {
-                    if (fi != null) {
-                        fi.release();
-                    }
-                }
+                handle = createHandle(ledgerId);
+                ledgers.put(ledgerId, handle);
             }
             handle.incRef();
         }
         return handle;
     }
 
-
-    private LedgerDescriptor createHandle(long ledgerId, boolean readOnly) throws IOException {
+    private LedgerDescriptor createHandle(long ledgerId) throws IOException {
         return new LedgerDescriptor(ledgerId, entryLogger, ledgerCache);
     }
 
@@ -889,13 +854,7 @@ public class Bookie extends Thread {
     private LedgerDescriptor getLedgerForEntry(ByteBuffer entry, byte[] masterKey) 
             throws IOException, BookieException {
         long ledgerId = entry.getLong();
-        LedgerDescriptor handle = getHandle(ledgerId, false, masterKey);
-
-        if(!handle.cmpMasterKey(ByteBuffer.wrap(masterKey))) {
-            putHandle(handle);
-            throw BookieException.create(BookieException.Code.UnauthorizedAccessException);
-        }
-        return handle;
+        return getHandle(ledgerId, false, masterKey);
     }
 
     /**
@@ -960,14 +919,14 @@ public class Bookie extends Thread {
      * never be unfenced. Fencing a fenced ledger has no effect.
      */
     public void fenceLedger(long ledgerId) throws IOException {
-        LedgerDescriptor handle = getHandle(ledgerId, true);
+        LedgerDescriptor handle = getHandle(ledgerId);
         synchronized (handle) {
             handle.setFenced();
         }
     }
 
     public ByteBuffer readEntry(long ledgerId, long entryId) throws IOException {
-        LedgerDescriptor handle = getHandle(ledgerId, true);
+        LedgerDescriptor handle = getHandle(ledgerId);
         try {
             if (LOG.isTraceEnabled()) {
                 LOG.trace("Reading " + entryId + "@" + ledgerId);
