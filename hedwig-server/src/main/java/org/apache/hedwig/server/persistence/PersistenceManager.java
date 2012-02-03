@@ -88,4 +88,6 @@ public interface PersistenceManager {
      */
     public void consumedUntil(ByteString topic, Long seqId);
 
+    public void setMessageBound(ByteString topic, Integer bound);
+    public void clearMessageBound(ByteString topic);
 }

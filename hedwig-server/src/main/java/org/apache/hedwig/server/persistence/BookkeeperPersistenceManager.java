@@ -124,7 +124,9 @@ public class BookkeeperPersistenceManager implements PersistenceManagerWithRange
          * messages
          */
         InMemoryLedgerRange currentLedgerRange;
-
+        
+        final static int UNLIMITED = -1;
+        int messageBound = UNLIMITED;
     }
 
     Map<ByteString, TopicInfo> topicInfos = new ConcurrentHashMap<ByteString, TopicInfo>();
@@ -338,7 +340,17 @@ public class BookkeeperPersistenceManager implements PersistenceManagerWithRange
     }
 
     public long getSeqIdAfterSkipping(ByteString topic, long seqId, int skipAmount) {
-        return seqId + skipAmount;
+        long perfectWorldNextId = seqId + skipAmount;
+        
+        TopicInfo topicInfo = topicInfos.get(topic);
+        if (topicInfo == null || topicInfo.messageBound == topicInfo.UNLIMITED) {
+            return perfectWorldNextId;
+        } else {
+            long maxSeq = topicInfo.lastSeqIdPushed.getLocalComponent();
+            long minSeq = maxSeq - topicInfo.messageBound;
+            logger.info("minSeq {}", minSeq);
+            return Math.max(minSeq, perfectWorldNextId);
+        }
     }
 
     public class PersistOp extends TopicOpQueuer.SynchronousOp {
@@ -734,4 +746,28 @@ public class BookkeeperPersistenceManager implements PersistenceManagerWithRange
         queuer.pushAndMaybeRun(topic, new ReleaseOp(topic));
     }
 
+    class SetMessageBoundOp extends TopicOpQueuer.SynchronousOp {
+        final int bound;
+
+        public SetMessageBoundOp(ByteString topic, int bound) {
+            queuer.super(topic);
+            this.bound = bound;
+        }
+
+        @Override
+        public void runInternal() {
+            TopicInfo topicInfo = topicInfos.get(topic);
+            if (topicInfo != null) {
+                topicInfo.messageBound = bound;
+            }
+        }
+    }
+    
+    public void setMessageBound(ByteString topic, Integer bound) {
+        queuer.pushAndMaybeRun(topic, new SetMessageBoundOp(topic, bound));
+    }
+
+    public void clearMessageBound(ByteString topic) {
+        queuer.pushAndMaybeRun(topic, new SetMessageBoundOp(topic, TopicInfo.UNLIMITED));
+    }
 }

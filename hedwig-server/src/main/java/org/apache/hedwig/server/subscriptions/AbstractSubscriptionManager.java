@@ -360,7 +360,12 @@ public abstract class AbstractSubscriptionManager implements SubscriptionManager
             }
 
             // now the hard case, this is a brand new subscription, must record
-            final SubscriptionState newState = SubscriptionState.newBuilder().setMsgId(consumeSeqId).build();
+            SubscriptionState.Builder stateBuilder = SubscriptionState.newBuilder().setMsgId(consumeSeqId);
+            if (subRequest.hasMessageBound()) {
+                stateBuilder = stateBuilder.setMessageBound(subRequest.getMessageBound());
+            }
+            final SubscriptionState newState = stateBuilder.build();
+
             createSubscriptionState(topic, subscriberId, newState, new Callback<Void>() {
                 @Override
                 public void operationFailed(Object ctx, PubSubException exception) {
@@ -406,6 +411,23 @@ public abstract class AbstractSubscriptionManager implements SubscriptionManager
                         @Override
                         public void operationFinished(Object ctx, Void resultOfOperation) {
                             topicSubscriptions.put(subscriberId, new InMemorySubscriptionState(newState));
+
+
+                            int maxBound = -1;
+                            for (Map.Entry<ByteString, InMemorySubscriptionState> e : topicSubscriptions.entrySet()) {
+                                if (!e.getValue().getSubscriptionState().hasMessageBound()) {
+                                    maxBound = -1;
+                                } else {
+                                    maxBound = Math.max(maxBound, e.getValue().getSubscriptionState().getMessageBound());
+                                }
+                            }
+                            logger.info("IKDEBUG maxBound {}", maxBound);
+                            if (maxBound == -1) {
+                                pm.clearMessageBound(topic);
+                            } else {
+                                pm.setMessageBound(topic, maxBound);
+                            }
+
                             cb.operationFinished(ctx, consumeSeqId);
                         }
 

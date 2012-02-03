@@ -341,7 +341,7 @@ public class FIFODeliveryManager implements Runnable, DeliveryManager {
             }
 
             localSeqIdDeliveringNow = persistenceMgr.getSeqIdAfterSkipping(topic, lastLocalSeqIdDelivered, 1);
-
+            logger.info("localSeqIdDeliveringNow {}", localSeqIdDeliveringNow);
             ScanRequest scanRequest = new ScanRequest(topic, localSeqIdDeliveringNow,
                     /* callback= */this, /* ctx= */null);
 

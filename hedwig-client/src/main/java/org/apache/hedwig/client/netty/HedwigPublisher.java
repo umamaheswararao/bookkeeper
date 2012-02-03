@@ -67,7 +67,7 @@ public class HedwigPublisher implements Publisher {
     public void publish(ByteString topic, Message msg) throws CouldNotConnectException, ServiceDownException {
         if (logger.isDebugEnabled())
             logger.debug("Calling a sync publish for topic: " + topic.toStringUtf8() + ", msg: " + msg);
-        PubSubData pubSubData = new PubSubData(topic, msg, null, OperationType.PUBLISH, null, null, null);
+        PubSubData pubSubData = new PubSubData(topic, msg, null, OperationType.PUBLISH, null, -1, null, null);
         synchronized (pubSubData) {
             PubSubCallback pubSubCallback = new PubSubCallback(pubSubData);
             asyncPublish(topic, msg, pubSubCallback, null);
@@ -110,7 +110,7 @@ public class HedwigPublisher implements Publisher {
             logger.debug("Calling an async publish for topic: " + topic.toStringUtf8() + ", msg: " + msg);
         // Check if we already have a Channel connection set up to the server
         // for the given Topic.
-        PubSubData pubSubData = new PubSubData(topic, msg, null, OperationType.PUBLISH, null, callback, context);
+        PubSubData pubSubData = new PubSubData(topic, msg, null, OperationType.PUBLISH, null, -1, callback, context);
         if (client.topic2Host.containsKey(topic)) {
             InetSocketAddress host = client.topic2Host.get(topic);
             if (host2Channel.containsKey(host)) {

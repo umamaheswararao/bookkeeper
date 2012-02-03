@@ -80,16 +80,16 @@ public class HedwigSubscriber implements Subscriber {
     // two flows are very similar. The assumption is that the input
     // OperationType is either SUBSCRIBE or UNSUBSCRIBE.
     private void subUnsub(ByteString topic, ByteString subscriberId, OperationType operationType,
-                          CreateOrAttach createOrAttach) throws CouldNotConnectException, ClientAlreadySubscribedException,
+            CreateOrAttach createOrAttach, int messageBound) throws CouldNotConnectException, ClientAlreadySubscribedException,
         ClientNotSubscribedException, ServiceDownException {
         if (logger.isDebugEnabled())
             logger.debug("Calling a sync subUnsub request for topic: " + topic.toStringUtf8() + ", subscriberId: "
                          + subscriberId.toStringUtf8() + ", operationType: " + operationType + ", createOrAttach: "
                          + createOrAttach);
-        PubSubData pubSubData = new PubSubData(topic, null, subscriberId, operationType, createOrAttach, null, null);
+        PubSubData pubSubData = new PubSubData(topic, null, subscriberId, operationType, createOrAttach, messageBound, null, null);
         synchronized (pubSubData) {
             PubSubCallback pubSubCallback = new PubSubCallback(pubSubData);
-            asyncSubUnsub(topic, subscriberId, pubSubCallback, null, operationType, createOrAttach);
+            asyncSubUnsub(topic, subscriberId, pubSubCallback, null, operationType, createOrAttach, messageBound);
             try {
                 while (!pubSubData.isDone)
                     pubSubData.wait();
@@ -133,14 +133,14 @@ public class HedwigSubscriber implements Subscriber {
     // flows are very similar. The assumption is that the input OperationType is
     // either SUBSCRIBE or UNSUBSCRIBE.
     private void asyncSubUnsub(ByteString topic, ByteString subscriberId, Callback<Void> callback, Object context,
-                               OperationType operationType, CreateOrAttach createOrAttach) {
+            OperationType operationType, CreateOrAttach createOrAttach, int messageBound) {
         if (logger.isDebugEnabled())
             logger.debug("Calling an async subUnsub request for topic: " + topic.toStringUtf8() + ", subscriberId: "
                          + subscriberId.toStringUtf8() + ", operationType: " + operationType + ", createOrAttach: "
                          + createOrAttach);
         // Check if we know which server host is the master for the topic we are
         // subscribing to.
-        PubSubData pubSubData = new PubSubData(topic, null, subscriberId, operationType, createOrAttach, callback,
+        PubSubData pubSubData = new PubSubData(topic, null, subscriberId, operationType, createOrAttach, messageBound, callback,
                                                context);
         if (client.topic2Host.containsKey(topic)) {
             InetSocketAddress host = client.topic2Host.get(topic);
@@ -173,12 +173,18 @@ public class HedwigSubscriber implements Subscriber {
     }
 
     public void subscribe(ByteString topic, ByteString subscriberId, CreateOrAttach mode)
-            throws CouldNotConnectException, ClientAlreadySubscribedException, ServiceDownException,
-        InvalidSubscriberIdException {
-        subscribe(topic, subscriberId, mode, false);
+            throws CouldNotConnectException, ClientAlreadySubscribedException,
+            ServiceDownException, InvalidSubscriberIdException {
+        subscribe(topic, subscriberId, mode, -1, false);
     }
 
-    protected void subscribe(ByteString topic, ByteString subscriberId, CreateOrAttach mode, boolean isHub)
+    public void subscribe(ByteString topic, ByteString subscriberId, CreateOrAttach mode, int messageBound)
+            throws CouldNotConnectException, ClientAlreadySubscribedException,
+                   ServiceDownException, InvalidSubscriberIdException {
+        subscribe(topic, subscriberId, mode, messageBound, false);
+    }
+
+    protected void subscribe(ByteString topic, ByteString subscriberId, CreateOrAttach mode, int messageBound, boolean isHub)
             throws CouldNotConnectException, ClientAlreadySubscribedException, ServiceDownException,
         InvalidSubscriberIdException {
         // Validate that the format of the subscriberId is valid either as a
@@ -188,7 +194,7 @@ public class HedwigSubscriber implements Subscriber {
                                                    + ", isHub: " + isHub);
         }
         try {
-            subUnsub(topic, subscriberId, OperationType.SUBSCRIBE, mode);
+            subUnsub(topic, subscriberId, OperationType.SUBSCRIBE, mode, messageBound);
         } catch (ClientNotSubscribedException e) {
             logger.error("Unexpected Exception thrown: " + e.toString());
             // This exception should never be thrown here. But just in case,
@@ -200,10 +206,15 @@ public class HedwigSubscriber implements Subscriber {
 
     public void asyncSubscribe(ByteString topic, ByteString subscriberId, CreateOrAttach mode, Callback<Void> callback,
                                Object context) {
-        asyncSubscribe(topic, subscriberId, mode, callback, context, false);
+        asyncSubscribe(topic, subscriberId, mode, -1, callback, context, false);
     }
 
-    protected void asyncSubscribe(ByteString topic, ByteString subscriberId, CreateOrAttach mode,
+    public void asyncSubscribe(ByteString topic, ByteString subscriberId, CreateOrAttach mode, int messageBound,
+                               Callback<Void> callback, Object context) {
+        asyncSubscribe(topic, subscriberId, mode, messageBound, callback, context, false);
+    }
+
+    protected void asyncSubscribe(ByteString topic, ByteString subscriberId, CreateOrAttach mode, int messageBound,
                                   Callback<Void> callback, Object context, boolean isHub) {
         // Validate that the format of the subscriberId is valid either as a
         // local or hub subscriber.
@@ -212,7 +223,7 @@ public class HedwigSubscriber implements Subscriber {
                                          "SubscriberId passed is not valid: " + subscriberId.toStringUtf8() + ", isHub: " + isHub)));
             return;
         }
-        asyncSubUnsub(topic, subscriberId, callback, context, OperationType.SUBSCRIBE, mode);
+        asyncSubUnsub(topic, subscriberId, callback, context, OperationType.SUBSCRIBE, mode, messageBound);
     }
 
     public void unsubscribe(ByteString topic, ByteString subscriberId) throws CouldNotConnectException,
@@ -236,7 +247,7 @@ public class HedwigSubscriber implements Subscriber {
         // "fully" unsubscribed from the given topic.
         closeSubscription(topic, subscriberId);
         try {
-            subUnsub(topic, subscriberId, OperationType.UNSUBSCRIBE, null);
+            subUnsub(topic, subscriberId, OperationType.UNSUBSCRIBE, null, -1);
         } catch (ClientAlreadySubscribedException e) {
             logger.error("Unexpected Exception thrown: " + e.toString());
             // This exception should never be thrown here. But just in case,
@@ -265,7 +276,7 @@ public class HedwigSubscriber implements Subscriber {
         asyncCloseSubscription(topic, subscriberId, new Callback<Void>() {
             @Override
             public void operationFinished(Object ctx, Void resultOfOperation) {
-                asyncSubUnsub(topic, subscriberId, callback, context, OperationType.UNSUBSCRIBE, null);
+                asyncSubUnsub(topic, subscriberId, callback, context, OperationType.UNSUBSCRIBE, null, -1);
             }
 
             @Override
@@ -297,7 +308,7 @@ public class HedwigSubscriber implements Subscriber {
                 "Cannot send consume message since client is not subscribed to topic: " + topic.toStringUtf8()
                 + ", subscriberId: " + subscriberId.toStringUtf8());
         }
-        PubSubData pubSubData = new PubSubData(topic, null, subscriberId, OperationType.CONSUME, null, null, null);
+        PubSubData pubSubData = new PubSubData(topic, null, subscriberId, OperationType.CONSUME, null, -1, null, null);
         // Send the consume message to the server using the same subscribe
         // channel that the topic subscription uses.
         doConsume(pubSubData, topicSubscriber2Channel.get(topicSubscriber), messageSeqId);
@@ -337,6 +348,10 @@ public class HedwigSubscriber implements Subscriber {
             // For now, all subscribes should wait for all cross-regional
             // subscriptions to be established before returning.
             subscribeRequestBuilder.setSynchronous(true);
+
+            if (pubSubData.messageBound != -1) {
+                subscribeRequestBuilder.setMessageBound(pubSubData.messageBound);
+            }
 
             // Set the SubscribeRequest into the outer PubSubRequest
             pubsubRequestBuilder.setSubscribeRequest(subscribeRequestBuilder);
@@ -516,7 +531,7 @@ public class HedwigSubscriber implements Subscriber {
     }
 
     public void closeSubscription(ByteString topic, ByteString subscriberId) throws ServiceDownException {
-        PubSubData pubSubData = new PubSubData(topic, null, subscriberId, null, null, null, null);
+        PubSubData pubSubData = new PubSubData(topic, null, subscriberId, null, null, -1, null, null);
         synchronized (pubSubData) {
             PubSubCallback pubSubCallback = new PubSubCallback(pubSubData);
             asyncCloseSubscription(topic, subscriberId, pubSubCallback, null);

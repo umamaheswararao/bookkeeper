@@ -46,13 +46,13 @@ public class HedwigHubSubscriber extends HedwigSubscriber {
     public void subscribe(ByteString topic, ByteString subscriberId, CreateOrAttach mode)
             throws CouldNotConnectException, ClientAlreadySubscribedException, ServiceDownException,
         InvalidSubscriberIdException {
-        subscribe(topic, subscriberId, mode, true);
+        subscribe(topic, subscriberId, mode, -1, true);
     }
 
     @Override
     public void asyncSubscribe(ByteString topic, ByteString subscriberId, CreateOrAttach mode, Callback<Void> callback,
                                Object context) {
-        asyncSubscribe(topic, subscriberId, mode, callback, context, true);
+        asyncSubscribe(topic, subscriberId, mode, -1, callback, context, true);
     }
 
     @Override
