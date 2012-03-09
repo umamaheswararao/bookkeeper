@@ -153,6 +153,7 @@ public class CompactionTest extends BaseTestCase {
 
     @Test
     public void testDisableCompaction() throws Exception {
+        LOG.info("IKDEBUG testDisableCompaction");
         // prepare data
         LedgerHandle[] lhs = prepareData(3, false);
 
@@ -180,6 +181,7 @@ public class CompactionTest extends BaseTestCase {
 
     @Test
     public void testMinorCompaction() throws Exception {
+        LOG.info("IKDEBUG testMinorCompaction");
         // prepare data
         LedgerHandle[] lhs = prepareData(3, false);
 
@@ -214,6 +216,7 @@ public class CompactionTest extends BaseTestCase {
 
     @Test
     public void testMajorCompaction() throws Exception {
+        LOG.info("IKDEBUG testMajorCompaction");
 
         // prepare data
         LedgerHandle[] lhs = prepareData(3, true);
@@ -250,6 +253,7 @@ public class CompactionTest extends BaseTestCase {
 
     @Test
     public void testMajorCompactionAboveThreshold() throws Exception {
+        LOG.info("IKDEBUG testMajorCompactionAboveThreshold");
         // prepare data
         LedgerHandle[] lhs = prepareData(3, false);
 
@@ -274,7 +278,7 @@ public class CompactionTest extends BaseTestCase {
 
     @Test
     public void testCompactionSmallEntryLogs() throws Exception {
-
+        LOG.info("IKDEBUG testCompactionSmallEntryLogs");
         // create a ledger to write a few entries
         LedgerHandle alh = bkc.createLedger(3, 3, digestType, "".getBytes());
         for (int i=0; i<3; i++) {
