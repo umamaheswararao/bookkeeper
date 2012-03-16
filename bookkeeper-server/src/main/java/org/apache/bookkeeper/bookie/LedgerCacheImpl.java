@@ -44,9 +44,116 @@ import org.slf4j.LoggerFactory;
  * an entry log file. It does user level caching to more efficiently manage disk
  * head scheduling.
  */
-public interface LedgerCache {
+public class LedgerCacheImpl {
+    private final static Logger LOG = LoggerFactory.getLogger(LedgerDescriptor.class);
 
-    public void putEntryOffset(long ledger, long entry, long offset) throws IOException;
+    final File ledgerDirectories[];
+
+    public LedgerCacheImpl(ServerConfiguration conf, LedgerManager alm) {
+        this.ledgerDirectories = Bookie.getCurrentDirectories(conf.getLedgerDirs());
+        this.openFileLimit = conf.getOpenFileLimit();
+        this.pageSize = conf.getPageSize();
+        this.entriesPerPage = pageSize / 8;
+        
+        if (conf.getPageLimit() <= 0) {
+            // allocate half of the memory to the page cache
+            this.pageLimit = (int)((Runtime.getRuntime().maxMemory() / 3) / this.pageSize);
+        } else {
+            this.pageLimit = conf.getPageLimit();
+        }
+        LOG.info("maxMemory = " + Runtime.getRuntime().maxMemory());
+        LOG.info("openFileLimit is " + openFileLimit + ", pageSize is " + pageSize + ", pageLimit is " + pageLimit);
+        activeLedgerManager = alm;
+        // Retrieve all of the active ledgers.
+        getActiveLedgers();
+    }
+    /**
+     * the list of potentially clean ledgers
+     */
+    LinkedList<Long> cleanLedgers = new LinkedList<Long>();
+
+    /**
+     * the list of potentially dirty ledgers
+     */
+    LinkedList<Long> dirtyLedgers = new LinkedList<Long>();
+
+    HashMap<Long, FileInfo> fileInfoCache = new HashMap<Long, FileInfo>();
+
+    LinkedList<Long> openLedgers = new LinkedList<Long>();
+
+    // Manage all active ledgers in LedgerManager
+    // so LedgerManager has knowledge to garbage collect inactive/deleted ledgers
+    final LedgerManager activeLedgerManager;
+
+    final int openFileLimit;
+    final int pageSize;
+    final int pageLimit;
+    final int entriesPerPage;
+
+    /**
+     * @return page size used in ledger cache
+     */
+    public int getPageSize() {
+        return pageSize;
+    }
+
+    /**
+     * @return entries per page used in ledger cache
+     */
+    public int getEntriesPerPage() {
+        return entriesPerPage;
+    }
+
+    /**
+     * @return page limitation in ledger cache
+     */
+    public int getPageLimit() {
+        return pageLimit;
+    }
+
+    // The number of pages that have actually been used
+    private int pageCount = 0;
+    HashMap<Long, HashMap<Long,LedgerEntryPage>> pages = new HashMap<Long, HashMap<Long,LedgerEntryPage>>();
+
+    /**
+     * @return number of page used in ledger cache
+     */
+    public int getNumUsedPages() {
+        return pageCount;
+    }
+
+    private void putIntoTable(HashMap<Long, HashMap<Long,LedgerEntryPage>> table, LedgerEntryPage lep) {
+        HashMap<Long, LedgerEntryPage> map = table.get(lep.getLedger());
+        if (map == null) {
+            map = new HashMap<Long, LedgerEntryPage>();
+            table.put(lep.getLedger(), map);
+        }
+        map.put(lep.getFirstEntry(), lep);
+    }
+
+    private static LedgerEntryPage getFromTable(HashMap<Long, HashMap<Long,LedgerEntryPage>> table, Long ledger, Long firstEntry) {
+        HashMap<Long, LedgerEntryPage> map = table.get(ledger);
+        if (map != null) {
+            return map.get(firstEntry);
+        }
+        return null;
+    }
+
+    synchronized private LedgerEntryPage getLedgerEntryPage(Long ledger, Long firstEntry, boolean onlyDirty) {
+        LedgerEntryPage lep = getFromTable(pages, ledger, firstEntry);
+        try {
+            if (onlyDirty && lep.isClean()) {
+                return null;
+            }
+            return lep;
+        } finally {
+            if (lep != null) {
+                lep.usePage();
+            }
+        }
+    }
+
+    public void putEntryOffset(long ledger, long entry, long offset) throws IOException {
         int offsetInPage = (int) (entry % entriesPerPage);
         // find the id of the first entry of the page that has the entry
         // we are looking for

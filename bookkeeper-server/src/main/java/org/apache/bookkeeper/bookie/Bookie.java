@@ -67,7 +67,6 @@ import org.apache.zookeeper.ZooDefs.Ids;
  */
 
 public class Bookie extends Thread {
-    HashMap<Long, LedgerDescriptor> ledgers = new HashMap<Long, LedgerDescriptor>();
     static Logger LOG = LoggerFactory.getLogger(Bookie.class);
 
     final static long MB = 1024 * 1024L;
@@ -105,6 +104,8 @@ public class Bookie extends Thread {
     // jmx related beans
     BookieBean jmxBookieBean;
     LedgerCacheBean jmxLedgerCacheBean;
+
+    Map<Long, byte[]> masterKeyCache = Collections.synchronizedMap(new HashMap<Long, byte[]>());
 
     public static class NoLedgerException extends IOException {
         private static final long serialVersionUID = 1L;
@@ -470,23 +471,27 @@ public class Bookie extends Thread {
                 recBuff.flip();
                 long ledgerId = recBuff.getLong();
                 long entryId = recBuff.getLong();
-                LedgerDescriptor handle;
                 try {
-                    handle = getHandle(ledgerId);
-                    LOG.debug("Relay journal - ledger id : {}, entry id : {}.", ledgerId, entryId);
+                    LOG.debug("Replay journal - ledger id : {}, entry id : {}.", ledgerId, entryId);
                     if (entryId == METAENTRY_ID_LEDGER_KEY) {
                         if (recLog.getFormatVersion() >= 3) {
                             int masterKeyLen = recBuff.getInt();
                             byte[] masterKey = new byte[masterKeyLen];
+
                             recBuff.get(masterKey);
-                            handle.checkAccess(masterKey);
-                            putHandle(handle);
+                            masterKeyCache.put(ledgerId, masterKey);
                         } else {
                             throw new IOException("Invalid journal. Contains journalKey "
                                     + " but layout version (" + recLog.getFormatVersion()
                                     + ") is too old to hold this");
                         }
                     } else {
+                        byte[] key = masterKeyCache.get(ledgerId);
+                        if (key == null) {
+                            key = ledgerCache.readKey(ledgerId);
+                        }
+                        LedgerDescriptor handle;
+
                         try {
                             recBuff.rewind();
                             handle.addEntry(recBuff);
@@ -695,46 +700,6 @@ public class Bookie extends Thread {
             total += rc;
         }
         return total;
-    }
-    private void putHandle(LedgerDescriptor handle) {
-        synchronized (ledgers) {
-            handle.decRef();
-        }
-    }
-
-    private LedgerDescriptor getHandle(long ledgerId, boolean readonly, byte[] masterKey) 
-            throws IOException, BookieException {
-        LedgerDescriptor handle = null;
-        synchronized (ledgers) {
-            handle = ledgers.get(ledgerId);
-            if (handle == null) {
-                if (readonly) {
-                    throw new NoLedgerException(ledgerId);
-                }
-                handle = createHandle(ledgerId);
-                ledgers.put(ledgerId, handle);
-            }
-            handle.checkAccess(masterKey);
-            handle.incRef();
-        }
-        return handle;
-    }
-
-    private LedgerDescriptor getHandle(long ledgerId) throws IOException {
-        LedgerDescriptor handle = null;
-        synchronized (ledgers) {
-            handle = ledgers.get(ledgerId);
-            if (handle == null) {
-                handle = createHandle(ledgerId);
-                ledgers.put(ledgerId, handle);
-            }
-            handle.incRef();
-        }
-        return handle;
-    }
-
-    private LedgerDescriptor createHandle(long ledgerId) throws IOException {
-        return new LedgerDescriptor(ledgerId, entryLogger, ledgerCache);
     }
 
     static class QueueEntry {
@@ -996,7 +961,7 @@ public class Bookie extends Thread {
             throws IOException, BookieException {
         long ledgerId = entry.getLong();
         LedgerDescriptor l = getHandle(ledgerId, false, masterKey);
-        if (!l.isMasterKeyPersisted()) {
+        if (!masterKeyCache.containsKey(ledgerId)) {
             // new handle, we should add the key to journal ensure we can rebuild
             ByteBuffer bb = ByteBuffer.allocate(8 + 8 + 4 + masterKey.length);
             bb.putLong(ledgerId);
@@ -1014,7 +979,7 @@ public class Bookie extends Thread {
                                              // do nothing
                                          }
                                      }, null));
-            l.setMasterKeyPersisted();
+            masterKeyCache.put(ledgerId, masterKey);
         }
         return l;
     }
