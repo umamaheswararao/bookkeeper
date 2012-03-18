@@ -574,7 +574,7 @@ public class Bookie extends Thread {
             BKMBeanRegistry.getInstance().register(jmxBookieBean, parent);
 
             try {
-                jmxLedgerCacheBean = new LedgerCacheBean(this.ledgerCache);
+                jmxLedgerCacheBean = new LedgerCacheBean((LedgerCacheImpl)this.ledgerCache);
                 BKMBeanRegistry.getInstance().register(jmxLedgerCacheBean, jmxBookieBean);
             } catch (Exception e) {
                 LOG.warn("Failed to register with JMX for ledger cache", e);

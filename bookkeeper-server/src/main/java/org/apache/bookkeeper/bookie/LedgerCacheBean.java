@@ -25,9 +25,9 @@ import org.apache.bookkeeper.jmx.BKMBeanInfo;
  */
 public class LedgerCacheBean implements LedgerCacheMXBean, BKMBeanInfo {
 
-    final LedgerCache lc;
+    final LedgerCacheImpl lc;
 
-    public LedgerCacheBean(LedgerCache lc) {
+    public LedgerCacheBean(LedgerCacheImpl lc) {
         this.lc = lc;
     }
 
