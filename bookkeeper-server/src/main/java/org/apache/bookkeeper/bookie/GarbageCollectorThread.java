@@ -72,6 +72,7 @@ public class GarbageCollectorThread extends Thread {
 
     // Ledger Cache Handle
     final LedgerCache ledgerCache;
+    final LedgerManager ledgerManager;
 
     // ZooKeeper Client
     final ZooKeeper zk;
@@ -115,6 +116,7 @@ public class GarbageCollectorThread extends Thread {
                                   ZooKeeper zookeeper,
                                   LedgerCache ledgerCache,
                                   EntryLogger entryLogger,
+                                  LedgerManager ledgerManager,
                                   EntryLogScanner scanner)
         throws IOException {
         super("GarbageCollectorThread");
@@ -122,6 +124,7 @@ public class GarbageCollectorThread extends Thread {
         this.zk = zookeeper;
         this.ledgerCache = ledgerCache;
         this.entryLogger = entryLogger;
+        this.ledgerManager = ledgerManager;
         this.scanner = scanner;
 
         this.gcWaitTime = conf.getGcWaitTime();
@@ -230,7 +233,7 @@ public class GarbageCollectorThread extends Thread {
      * Do garbage collection ledger index files
      */
     private void doGcLedgers() {
-        ledgerCache.activeLedgerManager.garbageCollectLedgers(
+        ledgerManager.garbageCollectLedgers(
         new LedgerManager.GarbageCollector() {
             @Override
             public void gc(long ledgerId) {
@@ -252,7 +255,7 @@ public class GarbageCollectorThread extends Thread {
             EntryLogMetadata meta = entryLogMetaMap.get(entryLogId);
             for (Long entryLogLedger : meta.ledgersMap.keySet()) {
                 // Remove the entry log ledger from the set if it isn't active.
-                if (!ledgerCache.activeLedgerManager.containsActiveLedger(entryLogLedger)) {
+                if (!ledgerManager.containsActiveLedger(entryLogLedger)) {
                     meta.removeLedger(entryLogLedger);
                 }
             }
@@ -437,7 +440,7 @@ public class GarbageCollectorThread extends Thread {
     /**
      * A scanner used to extract entry log meta from entry log files.
      */
-    class ExtractionScanner implements EntryLogScanner {
+    static class ExtractionScanner implements EntryLogScanner {
         EntryLogMetadata meta;
 
         public ExtractionScanner(EntryLogMetadata meta) {

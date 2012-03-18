@@ -44,7 +44,7 @@ import org.slf4j.LoggerFactory;
  * an entry log file. It does user level caching to more efficiently manage disk
  * head scheduling.
  */
-public class LedgerCacheImpl {
+public class LedgerCacheImpl implements LedgerCache {
     private final static Logger LOG = LoggerFactory.getLogger(LedgerDescriptor.class);
 
     final File ledgerDirectories[];
@@ -153,6 +153,7 @@ public class LedgerCacheImpl {
         }
     }
 
+    @Override
     public void putEntryOffset(long ledger, long entry, long offset) throws IOException {
         int offsetInPage = (int) (entry % entriesPerPage);
         // find the id of the first entry of the page that has the entry
@@ -174,6 +175,7 @@ public class LedgerCacheImpl {
         }
     }
 
+    @Override
     public long getEntryOffset(long ledger, long entry) throws IOException {
         int offsetInPage = (int) (entry%entriesPerPage);
         // find the id of the first entry of the page that has the entry
@@ -276,7 +278,8 @@ public class LedgerCacheImpl {
         }
     }
 
-    void flushLedger(boolean doAll) throws IOException {
+    @Override
+    public void flushLedger(boolean doAll) throws IOException {
         synchronized(dirtyLedgers) {
             if (dirtyLedgers.isEmpty()) {
                 synchronized(this) {
@@ -485,7 +488,8 @@ public class LedgerCacheImpl {
         }
     }
 
-    public long getLastEntry(long ledgerId) {
+    @Override
+    public long getLastEntry(long ledgerId) throws IOException {
         long lastEntry = 0;
         // Find the last entry in the cache
         synchronized(this) {
@@ -578,7 +582,8 @@ public class LedgerCacheImpl {
      * This method is called whenever a ledger is deleted by the BookKeeper Client
      * and we want to remove all relevant data for it stored in the LedgerCache.
      */
-    void deleteLedger(long ledgerId) throws IOException {
+    @Override
+    public void deleteLedger(long ledgerId) throws IOException {
         if (LOG.isDebugEnabled())
             LOG.debug("Deleting ledgerId: " + ledgerId);
         // Delete the ledger's index file and close the FileInfo
@@ -608,4 +613,38 @@ public class LedgerCacheImpl {
         }
     }
 
+    @Override
+    public byte[] readMasterKey(long ledgerId) throws IOException, BookieException {
+        synchronized(fileInfoCache) {
+            FileInfo fi = fileInfoCache.get(ledgerId);
+            if (fi == null) {
+                String ledgerName = getLedgerName(ledgerId);
+                File lf = null;
+                for(File d: ledgerDirectories) {
+                    lf = new File(d, ledgerName);
+                    if (lf.exists()) {
+                        break;
+                    }
+                    lf = null;
+                }
+                if (lf == null) {
+                    throw new Bookie.NoLedgerException(ledgerId);
+                }
+                if (openLedgers.size() > openFileLimit) {
+                    fileInfoCache.remove(openLedgers.removeFirst()).close();
+                }
+                fi = new FileInfo(lf, null);
+                byte[] key = fi.getMasterKey();
+                fileInfoCache.put(ledgerId, fi);
+                openLedgers.add(ledgerId);
+                return key;
+            } 
+            return fi.getMasterKey();
+        }
+    }
+
+    @Override
+    public void setMasterKey(long ledgerId, byte[] masterKey) throws IOException {
+        getFileInfo(ledgerId, masterKey);
+    }    
 }

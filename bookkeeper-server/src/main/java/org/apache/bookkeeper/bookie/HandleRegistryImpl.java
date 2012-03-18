@@ -1,12 +1,12 @@
-package org.apache.bookkeeper.bookie.HandleRegistry;
+package org.apache.bookkeeper.bookie;
 
 import java.io.IOException;
 import java.util.HashMap;
 
-public class HandleRegistryImpl implements HandleRegistry {
+class HandleRegistryImpl implements HandleRegistry {
     HashMap<Long, LedgerDescriptor> ledgers = new HashMap<Long, LedgerDescriptor>();
-    HashMap<Long, ReadOnlyLedgerDescriptor> readOnlyLedgers
-        = new HashMap<Long, ReadOnlyLedgerDescriptor>();
+    HashMap<Long, LedgerDescriptor> readOnlyLedgers
+        = new HashMap<Long, LedgerDescriptor>();
 
     final EntryLogger entryLogger;
     final LedgerCache ledgerCache;
@@ -16,11 +16,8 @@ public class HandleRegistryImpl implements HandleRegistry {
         this.ledgerCache = ledgerCache;
     }
 
-    LedgerDescriptor getHandle(long ledgerId) {
-        // load handle
-    }
-
-    LedgerDescriptor getHandle(long ledgerId, byte[] masterKey)
+    @Override
+    public LedgerDescriptor getHandle(long ledgerId, byte[] masterKey)
             throws IOException, BookieException {
         LedgerDescriptor handle = null;
         synchronized (ledgers) {
@@ -36,21 +33,23 @@ public class HandleRegistryImpl implements HandleRegistry {
         return handle;
     }
 
-    LedgerDescriptor getReadOnlyHandle(long ledgerId)
-            throws IOException, BookieException {
+    @Override
+    public LedgerDescriptor getReadOnlyHandle(long ledgerId)
+            throws IOException {
         LedgerDescriptor handle = null;
         synchronized (ledgers) {
             handle = readOnlyLedgers.get(ledgerId);
             if (handle == null) {
                 handle = LedgerDescriptor.createReadOnly(ledgerId, entryLogger, ledgerCache);
-                readOnlyledgers.put(ledgerId, handle);
+                readOnlyLedgers.put(ledgerId, handle);
             }
             handle.incRef();
         }
         return handle;
     }
 
-    void releaseHandle(LedgerDescriptor handle) {
+    @Override
+    public void releaseHandle(LedgerDescriptor handle) {
         synchronized (ledgers) {
             handle.decRef();
         }

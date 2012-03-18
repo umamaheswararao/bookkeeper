@@ -1,6 +1,8 @@
-package org.apache.bookkeeper.bookie.HandleRegistry;
+package org.apache.bookkeeper.bookie;
 
-public interface HandleRegistry {
+import java.io.IOException;
+
+interface HandleRegistry {
     LedgerDescriptor getHandle(long ledgerId, byte[] masterKey)
             throws IOException, BookieException;
 

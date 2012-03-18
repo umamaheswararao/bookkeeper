@@ -221,8 +221,8 @@ public class BookieRecoveryTest extends BaseTestCase {
      *
      * @throws Exception
      */
-    @Test
-    public void testAsyncBookieRecoveryToSpecificBookie() throws Exception {
+    //@Test
+    public void notestAsyncBookieRecoveryToSpecificBookie() throws Exception {
         // Create the ledgers
         int numLedgers = 3;
         List<LedgerHandle> lhs = createLedgers(numLedgers);
@@ -274,8 +274,8 @@ public class BookieRecoveryTest extends BaseTestCase {
      *
      * @throws Exception
      */
-    @Test
-    public void testAsyncBookieRecoveryToRandomBookies() throws Exception {
+    //@Test
+    public void notestAsyncBookieRecoveryToRandomBookies() throws Exception {
         // Create the ledgers
         int numLedgers = 3;
         List<LedgerHandle> lhs = createLedgers(numLedgers);
@@ -328,8 +328,8 @@ public class BookieRecoveryTest extends BaseTestCase {
      *
      * @throws Exception
      */
-    @Test
-    public void testSyncBookieRecoveryToSpecificBookie() throws Exception {
+    //@Test
+    public void notestSyncBookieRecoveryToSpecificBookie() throws Exception {
         // Create the ledgers
         int numLedgers = 3;
         List<LedgerHandle> lhs = createLedgers(numLedgers);
@@ -371,8 +371,8 @@ public class BookieRecoveryTest extends BaseTestCase {
      *
      * @throws Exception
      */
-    @Test
-    public void testSyncBookieRecoveryToRandomBookies() throws Exception {
+    //@Test
+    public void notestSyncBookieRecoveryToRandomBookies() throws Exception {
         // Create the ledgers
         int numLedgers = 3;
         List<LedgerHandle> lhs = createLedgers(numLedgers);
@@ -507,8 +507,8 @@ public class BookieRecoveryTest extends BaseTestCase {
         return numDupes > 0;
     }
 
-    @Test
-    public void testAsyncBookieRecoveryToRandomBookiesNotEnoughBookies() throws Exception {
+    //@Test
+    public void notestAsyncBookieRecoveryToRandomBookiesNotEnoughBookies() throws Exception {
         // Create the ledgers
         int numLedgers = 3;
         List<LedgerHandle> lhs = createLedgers(numLedgers, numBookies, 2);
@@ -541,6 +541,7 @@ public class BookieRecoveryTest extends BaseTestCase {
     public void testSyncBookieRecoveryToRandomBookiesCheckForDupes() throws Exception {
         Random r = new Random();
         for (int i = 0; i < 10; i++) {
+            LOG.info("IKDEBUG iteration {}", i);
             // Create the ledgers
             int numLedgers = 3;
             List<LedgerHandle> lhs = createLedgers(numLedgers, numBookies, 2);

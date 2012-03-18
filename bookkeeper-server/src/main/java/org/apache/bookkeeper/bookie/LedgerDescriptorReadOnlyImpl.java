@@ -22,7 +22,7 @@
 package org.apache.bookkeeper.bookie;
 
 import java.io.IOException;
-
+import java.nio.ByteBuffer;
 /**
  * Implements a ledger inside a bookie. In particular, it implements operations
  * to write entries to a ledger and read entries from a ledger.
@@ -35,16 +35,19 @@ public class LedgerDescriptorReadOnlyImpl extends LedgerDescriptorImpl {
 
     @Override
     void setFenced() throws IOException {
+        assert false;
         throw new IOException("Invalid action on read only descriptor");
     }
 
     @Override
     long addEntry(ByteBuffer entry) throws IOException {
+        assert false;
         throw new IOException("Invalid action on read only descriptor");
     }
 
     @Override
     void checkAccess(byte masterKey[]) throws BookieException, IOException {
+        assert false;
         throw new IOException("Invalid action on read only descriptor");
     }
 }

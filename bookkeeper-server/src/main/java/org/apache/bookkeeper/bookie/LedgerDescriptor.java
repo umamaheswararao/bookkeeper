@@ -35,12 +35,14 @@ import org.slf4j.LoggerFactory;
  * to write entries to a ledger and read entries from a ledger.
  *
  */
-public class LedgerDescriptor {
+public abstract class LedgerDescriptor {
     static LedgerDescriptor create(byte[] masterKey,
                                    long ledgerId,
                                    EntryLogger entryLogger,
-                                   LedgerCache ledgerCache) {
-        return new LedgerDescriptorImpl(masterKey, ledgerId, entryLogger, ledgerCache);
+                                   LedgerCache ledgerCache) throws IOException {
+        LedgerDescriptor ledger = new LedgerDescriptorImpl(masterKey, ledgerId, entryLogger, ledgerCache);
+        ledgerCache.setMasterKey(ledgerId, masterKey);
+        return ledger;
     }
 
     static LedgerDescriptor createReadOnly(long ledgerId,
@@ -49,16 +51,16 @@ public class LedgerDescriptor {
         return new LedgerDescriptorReadOnlyImpl(ledgerId, entryLogger, ledgerCache);
     }
 
-    void checkAccess(byte masterKey[]) throws BookieException, IOException;
+    abstract void checkAccess(byte masterKey[]) throws BookieException, IOException;
 
-    long getLedgerId();
+    abstract long getLedgerId();
 
-    void incRef();
-    void decRef();
+    abstract void incRef();
+    abstract void decRef();
 
-    void setFenced() throws BookieException;
-    boolean isFenced();
+    abstract void setFenced() throws IOException;
+    abstract boolean isFenced();
 
-    long addEntry(ByteBuffer entry) throws IOException;
-    ByteBuffer readEntry(long entryId) throws IOException;
+    abstract long addEntry(ByteBuffer entry) throws IOException;
+    abstract ByteBuffer readEntry(long entryId) throws IOException;
 }

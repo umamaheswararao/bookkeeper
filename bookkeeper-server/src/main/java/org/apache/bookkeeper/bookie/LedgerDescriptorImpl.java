@@ -33,7 +33,7 @@ import org.slf4j.LoggerFactory;
  * to write entries to a ledger and read entries from a ledger.
  *
  */
-public class LedgerDescriptorImpl extends LedgerDescriptorReadOnlyImpl {
+public class LedgerDescriptorImpl extends LedgerDescriptor {
     final static Logger LOG = LoggerFactory.getLogger(LedgerDescriptor.class);
     LedgerCache ledgerCache;
     private long ledgerId;
@@ -41,7 +41,7 @@ public class LedgerDescriptorImpl extends LedgerDescriptorReadOnlyImpl {
     // TODO: is refCnt even needed?
     private int refCnt;
     volatile private boolean fenced = false;
-
+    final byte[] masterKey;
 
     LedgerDescriptorImpl(byte[] masterKey, long ledgerId, EntryLogger entryLogger, LedgerCache ledgerCache) {
         this.masterKey = masterKey;

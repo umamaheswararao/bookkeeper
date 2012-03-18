@@ -39,6 +39,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Map;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -83,6 +84,7 @@ public class Bookie extends Thread {
 
     final SyncThread syncThread;
     final LedgerManager ledgerManager;
+    final HandleRegistry handles;
 
     static final long METAENTRY_ID_LEDGER_KEY = -0x1000;
 
@@ -401,9 +403,11 @@ public class Bookie extends Thread {
 
         syncThread = new SyncThread(conf);
         entryLogger = new EntryLogger(conf);
-        ledgerCache = new LedgerCache(conf, ledgerManager);
+        ledgerCache = new LedgerCacheImpl(conf, ledgerManager);
         gcThread = new GarbageCollectorThread(conf, this.zk, ledgerCache, entryLogger,
-                                              new EntryLogCompactionScanner());
+                ledgerManager, new EntryLogCompactionScanner());
+        handles = new HandleRegistryImpl(entryLogger, ledgerCache);
+
         // replay journals
         readJournal();
     }
@@ -488,15 +492,15 @@ public class Bookie extends Thread {
                     } else {
                         byte[] key = masterKeyCache.get(ledgerId);
                         if (key == null) {
-                            key = ledgerCache.readKey(ledgerId);
+                            key = ledgerCache.readMasterKey(ledgerId);
                         }
-                        LedgerDescriptor handle;
+                        LedgerDescriptor handle = handles.getHandle(ledgerId, key);
 
                         try {
                             recBuff.rewind();
                             handle.addEntry(recBuff);
                         } finally {
-                            putHandle(handle);
+                            handles.releaseHandle(handle);
                         }
                     }
                 } catch (NoLedgerException nsle) {
@@ -934,9 +938,7 @@ public class Bookie extends Thread {
                 this.interrupt();
                 this.join();
                 syncThread.shutdown();
-                for(LedgerDescriptor d: ledgers.values()) {
-                    d.close();
-                }
+
                 // Shutdown the EntryLogger which has the GarbageCollector Thread running
                 entryLogger.shutdown();
                 // close Ledger Manager
@@ -960,7 +962,7 @@ public class Bookie extends Thread {
     private LedgerDescriptor getLedgerForEntry(ByteBuffer entry, byte[] masterKey) 
             throws IOException, BookieException {
         long ledgerId = entry.getLong();
-        LedgerDescriptor l = getHandle(ledgerId, false, masterKey);
+        LedgerDescriptor l = handles.getHandle(ledgerId, masterKey);
         if (!masterKeyCache.containsKey(ledgerId)) {
             // new handle, we should add the key to journal ensure we can rebuild
             ByteBuffer bb = ByteBuffer.allocate(8 + 8 + 4 + masterKey.length);
@@ -986,12 +988,13 @@ public class Bookie extends Thread {
 
     protected void addEntryByLedgerId(long ledgerId, ByteBuffer entry)
         throws IOException, BookieException {
-        LedgerDescriptor handle = getHandle(ledgerId);
+        /** TODOIK fix this up
+           LedgerDescriptor handle = getHandle(ledgerId);
         try {
             handle.addEntry(entry);
         } finally {
             putHandle(handle);
-        }
+            }*/
     }
 
     /**
@@ -1023,7 +1026,7 @@ public class Bookie extends Thread {
             try {
                 addEntryInternal(handle, entry, cb, ctx);
             } finally {
-                putHandle(handle);
+                handles.releaseHandle(handle);
             }
         }
     }
@@ -1043,7 +1046,7 @@ public class Bookie extends Thread {
                 
                 addEntryInternal(handle, entry, cb, ctx);
             } finally {
-                putHandle(handle);
+                handles.releaseHandle(handle);
             }
         }
     }
@@ -1056,21 +1059,23 @@ public class Bookie extends Thread {
      * never be unfenced. Fencing a fenced ledger has no effect.
      */
     public void fenceLedger(long ledgerId) throws IOException {
-        LedgerDescriptor handle = getHandle(ledgerId);
+        /* IKTODO fix this up
+           LedgerDescriptor handle = getHandle(ledgerId);
         synchronized (handle) {
             handle.setFenced();
-        }
+            }*/
     }
 
-    public ByteBuffer readEntry(long ledgerId, long entryId) throws IOException {
-        LedgerDescriptor handle = getHandle(ledgerId);
+    public ByteBuffer readEntry(long ledgerId, long entryId)
+            throws IOException, BookieException {
+        LedgerDescriptor handle = handles.getReadOnlyHandle(ledgerId);
         try {
             if (LOG.isTraceEnabled()) {
                 LOG.trace("Reading " + entryId + "@" + ledgerId);
             }
             return handle.readEntry(entryId);
         } finally {
-            putHandle(handle);
+            handles.releaseHandle(handle);
         }
     }
 
