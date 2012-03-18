@@ -35,7 +35,7 @@ class HandleRegistryImpl implements HandleRegistry {
 
     @Override
     public LedgerDescriptor getReadOnlyHandle(long ledgerId)
-            throws IOException {
+            throws IOException, Bookie.NoLedgerException {
         LedgerDescriptor handle = null;
         synchronized (ledgers) {
             handle = readOnlyLedgers.get(ledgerId);

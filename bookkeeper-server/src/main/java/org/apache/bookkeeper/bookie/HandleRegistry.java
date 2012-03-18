@@ -7,7 +7,7 @@ interface HandleRegistry {
             throws IOException, BookieException;
 
     LedgerDescriptor getReadOnlyHandle(long ledgerId)
-            throws IOException, BookieException;
+            throws IOException, Bookie.NoLedgerException;
 
     void releaseHandle(LedgerDescriptor handle);
 }

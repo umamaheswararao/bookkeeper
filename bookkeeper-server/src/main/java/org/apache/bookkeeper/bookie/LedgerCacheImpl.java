@@ -646,5 +646,27 @@ public class LedgerCacheImpl implements LedgerCache {
     @Override
     public void setMasterKey(long ledgerId, byte[] masterKey) throws IOException {
         getFileInfo(ledgerId, masterKey);
-    }    
+    }
+
+    @Override
+    public boolean ledgerExists(long ledgerId) throws IOException {
+        synchronized(fileInfoCache) {
+            FileInfo fi = fileInfoCache.get(ledgerId);
+            if (fi == null) {
+                String ledgerName = getLedgerName(ledgerId);
+                File lf = null;
+                for(File d: ledgerDirectories) {
+                    lf = new File(d, ledgerName);
+                    if (lf.exists()) {
+                        break;
+                    }
+                    lf = null;
+                }
+                if (lf == null) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 }

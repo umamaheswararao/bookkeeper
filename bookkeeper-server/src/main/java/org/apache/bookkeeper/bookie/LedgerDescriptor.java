@@ -47,7 +47,11 @@ public abstract class LedgerDescriptor {
 
     static LedgerDescriptor createReadOnly(long ledgerId,
                                            EntryLogger entryLogger,
-                                           LedgerCache ledgerCache) {
+                                           LedgerCache ledgerCache)
+            throws IOException, Bookie.NoLedgerException {
+        if (!ledgerCache.ledgerExists(ledgerId)) {
+            throw new Bookie.NoLedgerException(ledgerId);
+        }
         return new LedgerDescriptorReadOnlyImpl(ledgerId, entryLogger, ledgerCache);
     }
 

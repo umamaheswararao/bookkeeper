@@ -988,13 +988,13 @@ public class Bookie extends Thread {
 
     protected void addEntryByLedgerId(long ledgerId, ByteBuffer entry)
         throws IOException, BookieException {
-        /** TODOIK fix this up
-           LedgerDescriptor handle = getHandle(ledgerId);
+        byte[] key = ledgerCache.readMasterKey(ledgerId);
+        LedgerDescriptor handle = handles.getHandle(ledgerId, key);
         try {
             handle.addEntry(entry);
         } finally {
-            putHandle(handle);
-            }*/
+            handles.releaseHandle(handle);
+        }
     }
 
     /**
@@ -1059,15 +1059,19 @@ public class Bookie extends Thread {
      * never be unfenced. Fencing a fenced ledger has no effect.
      */
     public void fenceLedger(long ledgerId) throws IOException {
-        /* IKTODO fix this up
-           LedgerDescriptor handle = getHandle(ledgerId);
-        synchronized (handle) {
-            handle.setFenced();
-            }*/
+        try {
+            byte[] key = ledgerCache.readMasterKey(ledgerId);
+            LedgerDescriptor handle = handles.getHandle(ledgerId, key);
+            synchronized (handle) {
+                handle.setFenced();
+            }
+        } catch (BookieException e) {
+            throw new IOException("Error fencing", e);
+        }
     }
 
     public ByteBuffer readEntry(long ledgerId, long entryId)
-            throws IOException, BookieException {
+            throws IOException, NoLedgerException {
         LedgerDescriptor handle = handles.getReadOnlyHandle(ledgerId);
         try {
             if (LOG.isTraceEnabled()) {

@@ -399,12 +399,6 @@ public class BookieServer implements NIOServerFactory.PacketProcessor, Bookkeepe
                     LOG.error("Error reading " + entryId + "@" + ledgerId, e);
                 }
                 errorCode = BookieProtocol.EIO;
-            } catch (BookieException e) {
-                // IKTODO, fix this up
-                if (LOG.isTraceEnabled()) {
-                    LOG.error("Error reading " + entryId + "@" + ledgerId, e);
-                }
-                errorCode = BookieProtocol.EIO;
             }
             rsp[0] = buildResponse(errorCode, h.getVersion(), h.getOpCode(), ledgerId, entryId);
 

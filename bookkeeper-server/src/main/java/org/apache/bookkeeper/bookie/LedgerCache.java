@@ -47,6 +47,7 @@ import org.slf4j.LoggerFactory;
 interface LedgerCache {
     void setMasterKey(long ledgerId, byte[] masterKey) throws IOException;
     byte[] readMasterKey(long ledgerId) throws IOException, BookieException;
+    boolean ledgerExists(long ledgerId) throws IOException;
 
     void putEntryOffset(long ledger, long entry, long offset) throws IOException;
     long getEntryOffset(long ledger, long entry) throws IOException;
