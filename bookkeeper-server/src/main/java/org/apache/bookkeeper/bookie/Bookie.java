@@ -136,12 +136,6 @@ public class Bookie extends Thread {
         }
     }
 
-    EntryLogger entryLogger;
-    LedgerCache ledgerCache;
-    // This is the thread that garbage collects the entry logs that do not
-    // contain any active ledgers in them; and compacts the entry logs that
-    // has lower remaining percentage to reclaim disk space.
-    final GarbageCollectorThread gcThread;
 
     /**
      * SyncThread is a background thread which flushes ledger index pages periodically.
@@ -184,7 +178,7 @@ public class Bookie extends Thread {
                 synchronized(this) {
                     try {
                         wait(flushInterval);
-                        if (!entryLogger.testAndClearSomethingWritten()) {
+                        if (!ledgerStorage.isFlushRequired()) {
                             continue;
                         }
                     } catch (InterruptedException e) {
@@ -207,15 +201,9 @@ public class Bookie extends Thread {
 
                 boolean flushFailed = false;
                 try {
-                    ledgerCache.flushLedger(true);
+                    ledgerStorage.flush();
                 } catch (IOException e) {
                     LOG.error("Exception flushing Ledger", e);
-                    flushFailed = true;
-                }
-                try {
-                    entryLogger.flush();
-                } catch (IOException e) {
-                    LOG.error("Exception flushing entry logger", e);
                     flushFailed = true;
                 }
 
@@ -402,11 +390,9 @@ public class Bookie extends Thread {
         ledgerManager = LedgerManagerFactory.newLedgerManager(conf, this.zk);
 
         syncThread = new SyncThread(conf);
-        entryLogger = new EntryLogger(conf);
-        ledgerCache = new LedgerCacheImpl(conf, ledgerManager);
-        gcThread = new GarbageCollectorThread(conf, this.zk, ledgerCache, entryLogger,
-                ledgerManager, new EntryLogCompactionScanner());
-        handles = new HandleFactoryImpl(entryLogger, ledgerCache);
+        ledgerStorage = new InterleavedLedgerStorage(conf, ledgerManager);
+
+        handles = new HandleFactoryImpl(ledgerStorage);
 
         // replay journals
         readJournal();
@@ -492,7 +478,7 @@ public class Bookie extends Thread {
                     } else {
                         byte[] key = masterKeyCache.get(ledgerId);
                         if (key == null) {
-                            key = ledgerCache.readMasterKey(ledgerId);
+                            key = ledgerStorage.readMasterKey(ledgerId);
                         }
                         LedgerDescriptor handle = handles.getHandle(ledgerId, key);
 
@@ -569,6 +555,7 @@ public class Bookie extends Thread {
             jmxBookieBean = new BookieBean(this);
             BKMBeanRegistry.getInstance().register(jmxBookieBean, parent);
 
+            /* IKTODO
             try {
                 jmxLedgerCacheBean = this.ledgerCache.getJMXBean();
                 BKMBeanRegistry.getInstance().register(jmxLedgerCacheBean, jmxBookieBean);
@@ -576,7 +563,7 @@ public class Bookie extends Thread {
                 LOG.warn("Failed to register with JMX for ledger cache", e);
                 jmxLedgerCacheBean = null;
             }
-
+            */
         } catch (Exception e) {
             LOG.warn("Failed to register with JMX", e);
             jmxBookieBean = null;
@@ -926,17 +913,16 @@ public class Bookie extends Thread {
                 this.exitCode = exitCode;
                 // mark bookie as in shutting down progress
                 shuttingdown = true;
-                // shut down gc thread, which depends on zookeeper client
-                // also compaction will write entries again to entry log file
-                gcThread.shutdown();
+
+                // Shutdown the EntryLogger which has the GarbageCollector Thread running
+                ledgerStorage.shutdown();
+ 
                 // Shutdown the ZK client
                 if(zk != null) zk.close();
                 this.interrupt();
                 this.join();
                 syncThread.shutdown();
 
-                // Shutdown the EntryLogger which has the GarbageCollector Thread running
-                entryLogger.shutdown();
                 // close Ledger Manager
                 ledgerManager.close();
                 // setting running to false here, so watch thread in bookie server know it only after bookie shut down
@@ -984,7 +970,7 @@ public class Bookie extends Thread {
 
     protected void addEntryByLedgerId(long ledgerId, ByteBuffer entry)
         throws IOException, BookieException {
-        byte[] key = ledgerCache.readMasterKey(ledgerId);
+        byte[] key = ledgerStorage.readMasterKey(ledgerId);
         LedgerDescriptor handle = handles.getHandle(ledgerId, key);
         handle.addEntry(entry);
     }
@@ -1044,7 +1030,7 @@ public class Bookie extends Thread {
      */
     public void fenceLedger(long ledgerId) throws IOException {
         try {
-            byte[] key = ledgerCache.readMasterKey(ledgerId);
+            byte[] key = ledgerStorage.readMasterKey(ledgerId);
             LedgerDescriptor handle = handles.getHandle(ledgerId, key);
             synchronized (handle) {
                 handle.setFenced();
