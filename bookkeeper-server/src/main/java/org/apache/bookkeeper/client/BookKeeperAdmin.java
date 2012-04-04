@@ -610,7 +610,7 @@ public class BookKeeperAdmin {
          */
         List<Long> entriesToReplicate = new LinkedList<Long>();
         for (long i = startEntryId; i <= endEntryId; i++) {
-            if (lh.getDistributionSchedule().getReplicaIndex(i, bookieIndex) >= 0) {
+            if (lh.getDistributionSchedule().getWriteSet(i).contains(bookieIndex)) {
                 /*
                  * Current entry is stored on the dead bookie so we'll need to
                  * read it and replicate it to a new bookie.
