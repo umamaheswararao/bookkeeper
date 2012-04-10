@@ -24,6 +24,7 @@ package org.apache.bookkeeper.benchmark;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.util.Enumeration;
 import java.util.HashMap;
 
@@ -38,6 +39,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.zookeeper.KeeperException;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.Path;
 
 /**
  * This is a simple test program to compare the performance of writing to
@@ -54,7 +60,7 @@ public class TestClient
     Integer entryId;
     HashMap<Integer, Integer> map;
 
-    FileOutputStream fStream;
+    OutputStream fStream;
     FileOutputStream fStreamLocal;
     long start, lastId;
 
@@ -84,7 +90,7 @@ public class TestClient
         }
     }
 
-    public TestClient(FileOutputStream fStream)
+    public TestClient(OutputStream fStream)
             throws FileNotFoundException {
         this.fStream = fStream;
         this.fStreamLocal = new FileOutputStream("./local.log");
@@ -126,13 +132,27 @@ public class TestClient
      */
     public static void main(String[] args) {
 
-        int lenght = Integer.parseInt(args[1]);
+        int length = Integer.parseInt(args[1]);
         StringBuilder sb = new StringBuilder();
-        while(lenght-- > 0) {
+        while(length-- > 0) {
             sb.append('a');
         }
 
-        Integer selection = Integer.parseInt(args[0]);
+        Integer selection;
+        try {
+            selection = Integer.parseInt(args[0]);
+        } catch(NumberFormatException e) {
+            if (args[0].equals("bk")) {
+                selection = 0;
+            } else if (args[0].equals("fs")) {
+                selection = 1;
+            } else if (args[0].equals("hdfs")) {
+                selection = 2;
+            } else {
+                selection = -1;
+            }
+                
+        }
         switch(selection) {
         case 0:
             StringBuilder servers_sb = new StringBuilder();
@@ -150,8 +170,8 @@ public class TestClient
                 LOG.error("Exception occurred", e);
             } 
             break;
-        case 1:
 
+        case 1:
             try {
                 TestClient c = new TestClient(new FileOutputStream(args[2]));
                 c.writeSameEntryBatchFS(sb.toString().getBytes(), Integer.parseInt(args[3]));
@@ -159,8 +179,20 @@ public class TestClient
                 LOG.error("File not found", e);
             }
             break;
+
         case 2:
+            try {
+                FileSystem fs = FileSystem.get(new Configuration());
+                TestClient c = new TestClient(fs.create(new Path(args[2])));
+                c.writeSameEntryBatchFS(sb.toString().getBytes(), Integer.parseInt(args[3]));
+            } catch(IOException e) {
+                LOG.error("File not found", e);
+            }
             break;
+
+        default:
+            System.err.println("Unknown option: " + args[0]);
+            System.exit(2);
         }
     }
 
@@ -216,6 +248,9 @@ public class TestClient
                 fStream.write(data);
                 fStreamLocal.write(data);
                 fStream.flush();
+                if (fStream instanceof FSDataOutputStream) {
+                    ((FSDataOutputStream)fStream).sync();
+                }
             }
             fStream.close();
             System.out.println("Finished processing writes (ms): " + (System.currentTimeMillis() - start));
