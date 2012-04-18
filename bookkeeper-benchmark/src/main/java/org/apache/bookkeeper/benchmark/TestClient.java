@@ -45,6 +45,14 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.Path;
 
+import org.apache.commons.cli.HelpFormatter;
+import org.apache.commons.cli.Option;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.PosixParser;
+import org.apache.commons.cli.ParseException;
+
 /**
  * This is a simple test program to compare the performance of writing to
  * BookKeeper and to the local file system.
@@ -73,7 +81,7 @@ public class TestClient
         this();
         x = new BookKeeper(servers);
         try {
-            lh = x.createLedger(DigestType.MAC, new byte[] {'a', 'b'});
+            lh = x.createLedger(DigestType.CRC32, new byte[] {'a', 'b'});
         } catch (BKException e) {
             LOG.error(e.toString());
         }
@@ -84,7 +92,7 @@ public class TestClient
         this();
         x = new BookKeeper(servers);
         try {
-            lh = x.createLedger(ensSize, qSize, DigestType.MAC, new byte[] {'a', 'b'});
+            lh = x.createLedger(ensSize, qSize, DigestType.CRC32, new byte[] {'a', 'b'});
         } catch (BKException e) {
             LOG.error(e.toString());
         }
@@ -122,6 +130,7 @@ public class TestClient
 
     public void closeHandle() throws KeeperException, InterruptedException, BKException {
         lh.close();
+        x.close();
     }
     /**
      * First says if entries should be written to BookKeeper (0) or to the local
@@ -130,68 +139,71 @@ public class TestClient
      *
      * @param args
      */
-    public static void main(String[] args) {
+    public static void main(String[] args) throws ParseException {
+        Options options = new Options();
+        options.addOption("length", true, "Length of packets being written. Default 1024");
+        options.addOption("target", true, "Target medium to write to. Options are bk, fs & hdfs. Default fs");
+        options.addOption("count", true, "Number of packets to write in run. Default 10000");
+        options.addOption("path", true, "Path to write to. fs & hdfs only. Default /foobar");
+        options.addOption("zkservers", true, "ZooKeeper servers, comma separated. bk only. Default localhost:2181.");
+        options.addOption("bkensemble", true, "BookKeeper ledger ensemble size. bk only. Default 3");
+        options.addOption("bkquorum", true, "BookKeeper ledger quorum size. bk only. Default 2");
+        options.addOption("sync", false, "Use synchronous writes with BookKeeper. bk only.");
+        options.addOption("help", false, "This message");
 
-        int length = Integer.parseInt(args[1]);
+        CommandLineParser parser = new PosixParser();
+        CommandLine cmd = parser.parse(options, args);
+
+        if (cmd.hasOption("help")) {
+            HelpFormatter formatter = new HelpFormatter();
+            formatter.printHelp("TestClient <options>", options);
+            System.exit(-1);
+        }
+
+        int length = Integer.valueOf(cmd.getOptionValue("length", "1024"));
+        String target = cmd.getOptionValue("target", "fs");
+        int count = Integer.valueOf(cmd.getOptionValue("count", "10000"));
+        String path = cmd.getOptionValue("path", "/foobar");
+        String zkservers = cmd.getOptionValue("zkservers", "localhost:2181");
+        int bkensemble = Integer.valueOf(cmd.getOptionValue("bkensemble", "3"));
+        int bkquorum = Integer.valueOf(cmd.getOptionValue("bkquorum", "2"));
+
         StringBuilder sb = new StringBuilder();
         while(length-- > 0) {
             sb.append('a');
         }
 
-        Integer selection;
-        try {
-            selection = Integer.parseInt(args[0]);
-        } catch(NumberFormatException e) {
-            if (args[0].equals("bk")) {
-                selection = 0;
-            } else if (args[0].equals("fs")) {
-                selection = 1;
-            } else if (args[0].equals("hdfs")) {
-                selection = 2;
-            } else {
-                selection = -1;
-            }
-                
-        }
-        switch(selection) {
-        case 0:
-            StringBuilder servers_sb = new StringBuilder();
-            for (int i = 4; i < args.length; i++) {
-                servers_sb.append(args[i] + " ");
-            }
-
-            String servers = servers_sb.toString().trim().replace(' ', ',');
+        if (target.equals("bk")) {
             try {
-                TestClient c = new TestClient(servers, Integer.parseInt(args[3]), Integer.parseInt(args[4]));
-                c.writeSameEntryBatch(sb.toString().getBytes(), Integer.parseInt(args[2]));
+                TestClient c = new TestClient(zkservers, bkensemble, bkquorum);
+                if (cmd.hasOption("sync")) {
+                    c.writeSameEntryBatchSync(sb.toString().getBytes(), count);
+                } else {
+                    c.writeSameEntryBatch(sb.toString().getBytes(), count);
+                }
                 //c.writeConsecutiveEntriesBatch(Integer.parseInt(args[0]));
                 c.closeHandle();
             } catch (Exception e) {
                 LOG.error("Exception occurred", e);
             } 
-            break;
-
-        case 1:
+        } else if (target.equals("fs")) {
             try {
-                TestClient c = new TestClient(new FileOutputStream(args[2]));
-                c.writeSameEntryBatchFS(sb.toString().getBytes(), Integer.parseInt(args[3]));
+                TestClient c = new TestClient(new FileOutputStream(path));
+                c.writeSameEntryBatchFS(sb.toString().getBytes(), count);
             } catch(FileNotFoundException e) {
                 LOG.error("File not found", e);
             }
-            break;
-
-        case 2:
+        } else if (target.equals("hdfs")) {
             try {
                 FileSystem fs = FileSystem.get(new Configuration());
-                TestClient c = new TestClient(fs.create(new Path(args[2])));
-                c.writeSameEntryBatchFS(sb.toString().getBytes(), Integer.parseInt(args[3]));
+                LOG.info("Default replication for HDFS: {}", fs.getDefaultReplication());
+                TestClient c = new TestClient(fs.create(new Path(path)));
+                c.writeSameEntryBatchFS(sb.toString().getBytes(), count);
             } catch(IOException e) {
                 LOG.error("File not found", e);
             }
-            break;
-
-        default:
-            System.err.println("Unknown option: " + args[0]);
+        } else {
+            System.err.println("Unknown option: " + target);
             System.exit(2);
         }
     }
@@ -203,12 +215,24 @@ public class TestClient
         while(count-- > 0) {
             lh.asyncAddEntry(data, this, this.getFreshEntryId(2));
         }
-        LOG.debug("Finished " + times + " async writes in ms: " + (System.currentTimeMillis() - start));
+        LOG.info("Finished " + times + " async writes in ms: " + (System.currentTimeMillis() - start));
         synchronized (map) {
             if(map.size() != 0)
                 map.wait();
         }
-        LOG.debug("Finished processing in ms: " + (System.currentTimeMillis() - start));
+        LOG.info("Finished processing in ms: " + (System.currentTimeMillis() - start));
+
+        LOG.debug("Ended computation");
+    }
+
+    void writeSameEntryBatchSync(byte[] data, int times) throws InterruptedException, BKException {
+        start = System.currentTimeMillis();
+        int count = times;
+        LOG.debug("Data: " + new String(data) + ", " + data.length);
+        while(count-- > 0) {
+            lh.addEntry(data);
+        }
+        LOG.info("Finished processing in ms: " + (System.currentTimeMillis() - start));
 
         LOG.debug("Ended computation");
     }
@@ -224,12 +248,12 @@ public class TestClient
             write[1] = (byte) k;
             lh.asyncAddEntry(write, this, this.getFreshEntryId(2));
         }
-        LOG.debug("Finished " + times + " async writes in ms: " + (System.currentTimeMillis() - start));
+        LOG.info("Finished " + times + " async writes in ms: " + (System.currentTimeMillis() - start));
         synchronized (map) {
             if(map.size() != 0)
                 map.wait();
         }
-        LOG.debug("Finished processing writes (ms): " + (System.currentTimeMillis() - start));
+        LOG.info("Finished processing writes (ms): " + (System.currentTimeMillis() - start));
 
         Integer mon = Integer.valueOf(0);
         synchronized(mon) {
@@ -246,14 +270,16 @@ public class TestClient
             start = System.currentTimeMillis();
             while(count-- > 0) {
                 fStream.write(data);
-                fStreamLocal.write(data);
+                //fStreamLocal.write(data);
                 fStream.flush();
                 if (fStream instanceof FSDataOutputStream) {
-                    ((FSDataOutputStream)fStream).sync();
+                    ((FSDataOutputStream)fStream).hflush();
+                } else if (fStream instanceof FileOutputStream) {
+                    ((FileOutputStream)fStream).getChannel().force(false);
                 }
             }
             fStream.close();
-            System.out.println("Finished processing writes (ms): " + (System.currentTimeMillis() - start));
+            LOG.info("Finished processing writes (ms): " + (System.currentTimeMillis() - start));
         } catch(IOException e) {
             LOG.error("IOException occurred", e);
         }

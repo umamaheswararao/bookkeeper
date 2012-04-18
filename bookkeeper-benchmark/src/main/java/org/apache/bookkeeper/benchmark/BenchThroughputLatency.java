@@ -411,7 +411,7 @@ public class BenchThroughputLatency implements AddCallback, Runnable {
         }
 
         BenchThroughputLatency warmup = new BenchThroughputLatency(bookies, bookies, passwd,
-                                                                   throttle, ledgers, servers);
+                                                                   10000, ledgers, servers);
         int limit = 50000;
 
         warmup.setSendLimit(limit);
