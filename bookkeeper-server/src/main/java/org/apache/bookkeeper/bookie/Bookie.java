@@ -646,13 +646,15 @@ public class Bookie extends Thread {
      */
     private void addEntryInternal(LedgerDescriptor handle, ByteBuffer entry, WriteCallback cb, Object ctx)
             throws IOException, BookieException {
+        long start = System.currentTimeMillis();
         long ledgerId = handle.getLedgerId();
         entry.rewind();
         long entryId = handle.addEntry(entry);
 
         entry.rewind();
         if (LOG.isTraceEnabled()) {
-            LOG.trace("Adding " + entryId + "@" + ledgerId);
+            LOG.trace("Adding Ledger {} Entry {} to handle in {}ms",
+                    new Object[] {ledgerId, entryId, System.currentTimeMillis() - start});
         }
         journal.logAddEntry(entry, cb, ctx);
     }
