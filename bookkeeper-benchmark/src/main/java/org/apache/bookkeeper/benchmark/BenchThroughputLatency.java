@@ -129,7 +129,7 @@ public class BenchThroughputLatency implements AddCallback, Runnable {
          return rand.nextInt(numberOfLedgers);
     }
 
-    int sendLimit = 2000000;
+    int sendLimit = 20000000;
     long latencies[] = new long[sendLimit];
     int latencyIndex = -1;
     AtomicLong completedRequests = new AtomicLong(0);
@@ -250,6 +250,7 @@ public class BenchThroughputLatency implements AddCallback, Runnable {
         options.addOption("zookeeper", true, "Zookeeper ensemble, default \"localhost:2181\"");
         options.addOption("password", true, "Password used to create ledgers (default 'benchPasswd')");
         options.addOption("coord_node", true, "Coordination znode for multi client benchmarks (optional)");
+        options.addOption("skipWarmup", false, "Skip warm up, default false");
         options.addOption("help", false, "This message");
 
         CommandLineParser parser = new PosixParser();
@@ -285,19 +286,22 @@ public class BenchThroughputLatency implements AddCallback, Runnable {
         // Do a warmup run
         Thread thread;
 
-        long lastWarmUpTP = -1;
-        long throughput;
-        LOG.info("Starting warmup");
         byte data[] = new byte[entrysize];
         Arrays.fill(data, (byte)'x');
+            
+        if (!cmd.hasOption("skipWarmup")) {
+            long lastWarmUpTP = -1;
+            long throughput;
+            LOG.info("Starting warmup");
 
-        while(lastWarmUpTP < (throughput = warmUp(servers, data, ledgers, ensemble, quorum, passwd, throttle))) {
-            LOG.info("Warmup tp: " + throughput);
-            lastWarmUpTP = throughput;
-            // we will just run once, so lets break
-            break;
+            while(lastWarmUpTP < (throughput = warmUp(servers, data, ledgers, ensemble, quorum, passwd, throttle))) {
+                LOG.info("Warmup tp: " + throughput);
+                lastWarmUpTP = throughput;
+                // we will just run once, so lets break
+                break;
+            }
+            LOG.info("Warmup phase finished");
         }
-        LOG.info("Warmup phase finished");
 
         // Now do the benchmark
         BenchThroughputLatency bench = new BenchThroughputLatency(ensemble, quorum, passwd, throttle, ledgers, servers);
@@ -340,14 +344,27 @@ public class BenchThroughputLatency implements AddCallback, Runnable {
         thread.join();
 
         LOG.info("Calculating percentiles");
-        ArrayList<Long> latency = new ArrayList<Long>();
+
+        int numlat = 0;
         for(int i = 0; i < bench.latencies.length; i++) {
             if (bench.latencies[i] > 0) {
-                latency.add(bench.latencies[i]);
+                numlat++;
             }
         }
-        double tp = (double)latency.size()*1000.0/(double)bench.getDuration();
-        LOG.info(latency.size() + " completions in " + bench.getDuration() + " seconds: " + tp + " ops/sec");
+        int numcompletions = numlat;
+        numlat = Math.min(bench.sendLimit, numlat);
+        long[] latency = new long[numlat];
+        int j =0;
+        for(int i = 0; i < bench.latencies.length && j < numlat; i++) {
+            if (bench.latencies[i] > 0) {
+                latency[j++] = bench.latencies[i];
+            }
+        }
+        Arrays.sort(latency);
+            
+        long tp = (long)((double)(numcompletions*1000.0)/(double)bench.getDuration());
+
+        LOG.info(numcompletions + " completions in " + bench.getDuration() + " seconds: " + tp + " ops/sec");
 
         if (zk != null) {
             zk.create(coordinationZnode + "/worker-", 
@@ -366,20 +383,19 @@ public class BenchThroughputLatency implements AddCallback, Runnable {
         fos.close();
 
         // now get the latencies
-        Collections.sort(latency);
         LOG.info("99th percentile latency: {}", percentile(latency, 99));
         LOG.info("95th percentile latency: {}", percentile(latency, 95));
 
         bench.close();
     }
 
-    private static double percentile(ArrayList<Long> latency, int percentile) {
-        int size = latency.size();
+    private static double percentile(long[] latency, int percentile) {
+        int size = latency.length;
         int sampleSize = (size * percentile) / 100;
         long total = 0;
         int count = 0;
         for(int i = 0; i < sampleSize; i++) {
-            total += latency.get(i);
+            total += latency[i];
             count++;
         }
         return ((double)total/(double)count)/1000000.0;

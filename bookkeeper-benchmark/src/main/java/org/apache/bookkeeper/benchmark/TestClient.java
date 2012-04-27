@@ -28,9 +28,13 @@ import java.io.OutputStream;
 import java.util.Enumeration;
 import java.util.HashMap;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import org.apache.bookkeeper.client.AsyncCallback.AddCallback;
 import org.apache.bookkeeper.client.AsyncCallback.ReadCallback;
 import org.apache.bookkeeper.client.BKException;
+import org.apache.bookkeeper.conf.ClientConfiguration;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerEntry;
 import org.apache.bookkeeper.client.LedgerHandle;
@@ -87,10 +91,14 @@ public class TestClient
         }
     }
 
-    public TestClient(String servers, int ensSize, int qSize)
+    public TestClient(String servers, int ensSize, int qSize, int throttle)
             throws KeeperException, IOException, InterruptedException {
         this();
-        x = new BookKeeper(servers);
+        ClientConfiguration conf = new ClientConfiguration();
+        conf.setThrottleValue(100000);
+        conf.setZkServers(servers);
+
+        x = new BookKeeper(conf);
         try {
             lh = x.createLedger(ensSize, qSize, DigestType.CRC32, new byte[] {'a', 'b'});
         } catch (BKException e) {
@@ -148,6 +156,7 @@ public class TestClient
         options.addOption("zkservers", true, "ZooKeeper servers, comma separated. bk only. Default localhost:2181.");
         options.addOption("bkensemble", true, "BookKeeper ledger ensemble size. bk only. Default 3");
         options.addOption("bkquorum", true, "BookKeeper ledger quorum size. bk only. Default 2");
+        options.addOption("bkthrottle", true, "BookKeeper throttle size. bk only. Default 10000");
         options.addOption("sync", false, "Use synchronous writes with BookKeeper. bk only.");
         options.addOption("help", false, "This message");
 
@@ -163,10 +172,6 @@ public class TestClient
         int length = Integer.valueOf(cmd.getOptionValue("length", "1024"));
         String target = cmd.getOptionValue("target", "fs");
         int count = Integer.valueOf(cmd.getOptionValue("count", "10000"));
-        String path = cmd.getOptionValue("path", "/foobar");
-        String zkservers = cmd.getOptionValue("zkservers", "localhost:2181");
-        int bkensemble = Integer.valueOf(cmd.getOptionValue("bkensemble", "3"));
-        int bkquorum = Integer.valueOf(cmd.getOptionValue("bkquorum", "2"));
 
         StringBuilder sb = new StringBuilder();
         while(length-- > 0) {
@@ -175,7 +180,11 @@ public class TestClient
 
         if (target.equals("bk")) {
             try {
-                TestClient c = new TestClient(zkservers, bkensemble, bkquorum);
+                String zkservers = cmd.getOptionValue("zkservers", "localhost:2181");
+                int bkensemble = Integer.valueOf(cmd.getOptionValue("bkensemble", "3"));
+                int bkquorum = Integer.valueOf(cmd.getOptionValue("bkquorum", "2"));
+                int bkthrottle = Integer.valueOf(cmd.getOptionValue("bkthrottle", "10000"));
+                TestClient c = new TestClient(zkservers, bkensemble, bkquorum, bkthrottle);
                 if (cmd.hasOption("sync")) {
                     c.writeSameEntryBatchSync(sb.toString().getBytes(), count);
                 } else {
@@ -187,18 +196,22 @@ public class TestClient
                 LOG.error("Exception occurred", e);
             } 
         } else if (target.equals("fs")) {
+            String path = cmd.getOptionValue("path", "/foobar");
+
             try {
                 TestClient c = new TestClient(new FileOutputStream(path));
-                c.writeSameEntryBatchFS(sb.toString().getBytes(), count);
+                c.writeSameEntryBatchFS(sb.toString().getBytes(), count, cmd.hasOption("sync"));
             } catch(FileNotFoundException e) {
                 LOG.error("File not found", e);
             }
         } else if (target.equals("hdfs")) {
+            String path = cmd.getOptionValue("path", "/foobar");
+
             try {
                 FileSystem fs = FileSystem.get(new Configuration());
                 LOG.info("Default replication for HDFS: {}", fs.getDefaultReplication());
                 TestClient c = new TestClient(fs.create(new Path(path)));
-                c.writeSameEntryBatchFS(sb.toString().getBytes(), count);
+                c.writeSameEntryBatchFS(sb.toString().getBytes(), count, cmd.hasOption("sync"));
             } catch(IOException e) {
                 LOG.error("File not found", e);
             }
@@ -220,7 +233,8 @@ public class TestClient
             if(map.size() != 0)
                 map.wait();
         }
-        LOG.info("Finished processing in ms: " + (System.currentTimeMillis() - start));
+        long time = (System.currentTimeMillis() - start);
+        LOG.info("Finished processing writes (ms): {} TPT: {} op/s", time, times/((double)time/1000));
 
         LOG.debug("Ended computation");
     }
@@ -232,7 +246,8 @@ public class TestClient
         while(count-- > 0) {
             lh.addEntry(data);
         }
-        LOG.info("Finished processing in ms: " + (System.currentTimeMillis() - start));
+        long time = (System.currentTimeMillis() - start);
+        LOG.info("Finished processing writes (ms): {} TPT: {} op/s", time, times/((double)time/1000));
 
         LOG.debug("Ended computation");
     }
@@ -253,7 +268,8 @@ public class TestClient
             if(map.size() != 0)
                 map.wait();
         }
-        LOG.info("Finished processing writes (ms): " + (System.currentTimeMillis() - start));
+        long time = (System.currentTimeMillis() - start);
+        LOG.info("Finished processing writes (ms): {} TPT: {} op/s", time, times/((double)time/1000));
 
         Integer mon = Integer.valueOf(0);
         synchronized(mon) {
@@ -263,25 +279,80 @@ public class TestClient
         LOG.error("Ended computation");
     }
 
-    void writeSameEntryBatchFS(byte[] data, int times) {
+    class SyncThread implements Runnable {
+        final AtomicInteger outstanding;
+        final OutputStream fStream; 
+        final AtomicBoolean done;
+
+        SyncThread(AtomicInteger outstanding, AtomicBoolean done, OutputStream fStream) {
+            this.outstanding = outstanding;
+            this.done = done;
+            this.fStream = fStream;
+        }
+            
+        public void run() {
+            try {
+                while (true) {
+                    int toSync = outstanding.get();
+
+                    fStream.flush();
+                    if (fStream instanceof FSDataOutputStream) {
+                        ((FSDataOutputStream)fStream).hflush();
+                    } else if (fStream instanceof FileOutputStream) {
+                        ((FileOutputStream)fStream).getChannel().force(false);
+                    }
+                    outstanding.addAndGet(-1 * toSync);
+
+                    if (outstanding.get() == 0
+                        && done.get()) {
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                LOG.warn("Exceptin in sync thread", e);
+            }
+        }
+    }
+
+    void writeSameEntryBatchFS(byte[] data, int times, boolean sync) {
         int count = times;
         LOG.debug("Data: " + data.length + ", " + times);
+
+        AtomicInteger outstanding = new AtomicInteger(0);
+        AtomicBoolean done = new AtomicBoolean(false);
+        Thread t = new Thread(new SyncThread(outstanding, done, fStream));
+        if (!sync) {
+            t.start();
+        }
         try {
             start = System.currentTimeMillis();
             while(count-- > 0) {
                 fStream.write(data);
-                //fStreamLocal.write(data);
-                fStream.flush();
-                if (fStream instanceof FSDataOutputStream) {
-                    ((FSDataOutputStream)fStream).hflush();
-                } else if (fStream instanceof FileOutputStream) {
-                    ((FileOutputStream)fStream).getChannel().force(false);
+                if (sync) {
+                    fStream.flush();
+                    if (fStream instanceof FSDataOutputStream) {
+                        ((FSDataOutputStream)fStream).hflush();
+                    } else if (fStream instanceof FileOutputStream) {
+                        ((FileOutputStream)fStream).getChannel().force(false);
+                    }
+                } else {
+                    //fStreamLocal.write(data);
+                    outstanding.incrementAndGet();
+                }
+            }
+
+            if (!sync) {
+                done.set(true);
+                t.join();
+                if (outstanding.get() != 0) {
+                    throw new IOException("Not all entries synced");
                 }
             }
             fStream.close();
-            LOG.info("Finished processing writes (ms): " + (System.currentTimeMillis() - start));
-        } catch(IOException e) {
-            LOG.error("IOException occurred", e);
+            long time = (System.currentTimeMillis() - start);
+            LOG.info("Finished processing writes (ms): {} TPT: {} op/s", time, times/((double)time/1000));
+        } catch(Exception e) {
+            LOG.error("Exception occurred", e);
         }
     }
 

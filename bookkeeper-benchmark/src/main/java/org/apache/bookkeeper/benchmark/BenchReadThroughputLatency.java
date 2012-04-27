@@ -83,13 +83,14 @@ public class BenchReadThroughputLatency {
         long lastRead = 0;
         int nochange = 0;
 
+        long absoluteLimit = 5000000;
         LedgerHandle lh = null;
         try {
             bk = new BookKeeper(zkservers);
             while (true) {
                 lh = bk.openLedgerNoRecovery(ledgerId, BookKeeper.DigestType.CRC32, 
                                              passwd);
-                long lastConfirmed = lh.getLastAddConfirmed();
+                long lastConfirmed = Math.min(lh.getLastAddConfirmed(), absoluteLimit);
                 if (lastConfirmed == lastRead) {
                     nochange++;
                     if (nochange == 10) {
@@ -102,14 +103,18 @@ public class BenchReadThroughputLatency {
                     nochange = 0;
                 }
                 long starttime = System.nanoTime();
-
-                Enumeration<LedgerEntry> entries = lh.readEntries(lastRead+1, lastConfirmed);
-                lastRead = lastConfirmed;
-                while (entries.hasMoreElements()) {
-                    LedgerEntry e = entries.nextElement();
-                    entriesRead++;
-                    if ((entriesRead % 10000) == 0) {
-                        LOG.info("{} entries read", entriesRead);
+                
+                while (lastRead < lastConfirmed) {
+                    long nextLimit = lastRead + 10000;
+                    long readTo = Math.min(nextLimit, lastConfirmed);
+                    Enumeration<LedgerEntry> entries = lh.readEntries(lastRead+1, readTo);
+                    lastRead = readTo;
+                    while (entries.hasMoreElements()) {
+                        LedgerEntry e = entries.nextElement();
+                        entriesRead++;
+                        if ((entriesRead % 10000) == 0) {
+                            LOG.info("{} entries read", entriesRead);
+                        }
                     }
                 }
                 long endtime = System.nanoTime();
