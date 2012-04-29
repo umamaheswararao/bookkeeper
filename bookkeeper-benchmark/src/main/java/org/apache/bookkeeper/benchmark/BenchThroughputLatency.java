@@ -103,7 +103,7 @@ public class BenchThroughputLatency implements AddCallback, Runnable {
             for(int i = 0; i < this.numberOfLedgers; i++) {
                 lh[i] = bk.createLedger(ensemble, qSize, BookKeeper.DigestType.CRC32, 
                                         passwd);
-                LOG.info("Ledger Handle: " + lh[i].getId());
+                LOG.debug("Ledger Handle: " + lh[i].getId());
             }
         } catch (BKException e) {
             e.printStackTrace();

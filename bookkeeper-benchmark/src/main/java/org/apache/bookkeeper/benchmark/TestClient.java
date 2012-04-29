@@ -413,6 +413,7 @@ public class TestClient
                          time, count/((double)time/1000));
                 return count;
             } catch(Exception e) {
+                e.printStackTrace();
                 return 0L;
             }
         }

@@ -45,6 +45,7 @@ class InterleavedLedgerStorage implements LedgerStorage {
     // contain any active ledgers in them; and compacts the entry logs that
     // has lower remaining percentage to reclaim disk space.
     final GarbageCollectorThread gcThread;
+    final Object flushLock = new Object();
 
     // this indicates that a write has happened since the last flush
     private volatile boolean somethingWritten = false;
@@ -131,7 +132,7 @@ class InterleavedLedgerStorage implements LedgerStorage {
 
     @Override
     public void flush() throws IOException {
-        synchronized (entryLogger) {
+        synchronized (flushLock) {
             if (!somethingWritten) {
                 return;
             }
