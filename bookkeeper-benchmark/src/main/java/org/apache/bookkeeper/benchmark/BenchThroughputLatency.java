@@ -32,6 +32,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.conf.ClientConfiguration;
@@ -250,6 +252,8 @@ public class BenchThroughputLatency implements AddCallback, Runnable {
         options.addOption("zookeeper", true, "Zookeeper ensemble, default \"localhost:2181\"");
         options.addOption("password", true, "Password used to create ledgers (default 'benchPasswd')");
         options.addOption("coord_node", true, "Coordination znode for multi client benchmarks (optional)");
+        options.addOption("timeout", true, "Number of seconds after which to give up");
+
         options.addOption("skipWarmup", false, "Skip warm up, default false");
         options.addOption("help", false, "This message");
 
@@ -273,6 +277,18 @@ public class BenchThroughputLatency implements AddCallback, Runnable {
 
         String coordinationZnode = cmd.getOptionValue("coord_node");
         final byte[] passwd = cmd.getOptionValue("password", "benchPasswd").getBytes();
+
+        Timer timeouter = new Timer();
+        if (cmd.hasOption("timeout")) {
+            final long timeout = Long.valueOf(cmd.getOptionValue("timeout", "360")) * 1000;
+
+            timeouter.schedule(new TimerTask() {
+                    public void run() {
+                        System.err.println("Timing out benchmark after " + timeout + "ms");
+                        System.exit(-1);
+                    }
+                }, timeout);
+        }
 
         LOG.warn("(Parameters received) running time: " + runningTime +
                 ", entry size: " + entrysize + ", ensemble size: " + ensemble +
@@ -387,6 +403,7 @@ public class BenchThroughputLatency implements AddCallback, Runnable {
         LOG.info("95th percentile latency: {}", percentile(latency, 95));
 
         bench.close();
+        timeouter.cancel();
     }
 
     private static double percentile(long[] latency, int percentile) {

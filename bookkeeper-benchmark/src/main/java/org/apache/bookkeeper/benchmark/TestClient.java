@@ -27,7 +27,17 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Random;
+import java.util.Timer;
+import java.util.TimerTask;
 
+import java.util.concurrent.Future;;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -57,6 +67,7 @@ import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.PosixParser;
 import org.apache.commons.cli.ParseException;
 
+
 /**
  * This is a simple test program to compare the performance of writing to
  * BookKeeper and to the local file system.
@@ -75,6 +86,7 @@ public class TestClient
     OutputStream fStream;
     FileOutputStream fStreamLocal;
     long start, lastId;
+
 
     public TestClient() {
         entryId = 0;
@@ -151,13 +163,15 @@ public class TestClient
         Options options = new Options();
         options.addOption("length", true, "Length of packets being written. Default 1024");
         options.addOption("target", true, "Target medium to write to. Options are bk, fs & hdfs. Default fs");
-        options.addOption("count", true, "Number of packets to write in run. Default 10000");
+        options.addOption("runfor", true, "Number of seconds to run for. Default 60");
         options.addOption("path", true, "Path to write to. fs & hdfs only. Default /foobar");
         options.addOption("zkservers", true, "ZooKeeper servers, comma separated. bk only. Default localhost:2181.");
         options.addOption("bkensemble", true, "BookKeeper ledger ensemble size. bk only. Default 3");
         options.addOption("bkquorum", true, "BookKeeper ledger quorum size. bk only. Default 2");
         options.addOption("bkthrottle", true, "BookKeeper throttle size. bk only. Default 10000");
         options.addOption("sync", false, "Use synchronous writes with BookKeeper. bk only.");
+        options.addOption("numfiles", true, "Number of files to write to concurrently. hdfs only");
+        options.addOption("timeout", true, "Number of seconds after which to give up");
         options.addOption("help", false, "This message");
 
         CommandLineParser parser = new PosixParser();
@@ -171,13 +185,24 @@ public class TestClient
 
         int length = Integer.valueOf(cmd.getOptionValue("length", "1024"));
         String target = cmd.getOptionValue("target", "fs");
-        int count = Integer.valueOf(cmd.getOptionValue("count", "10000"));
+        long runfor = Long.valueOf(cmd.getOptionValue("runfor", "60")) * 1000;
 
         StringBuilder sb = new StringBuilder();
         while(length-- > 0) {
             sb.append('a');
         }
 
+        Timer timeouter = new Timer();
+        if (cmd.hasOption("timeout")) {
+            final long timeout = Long.valueOf(cmd.getOptionValue("timeout", "360")) * 1000;
+
+            timeouter.schedule(new TimerTask() {
+                    public void run() {
+                        System.err.println("Timing out benchmark after " + timeout + "ms");
+                        System.exit(-1);
+                    }
+                }, timeout);
+        }
         if (target.equals("bk")) {
             try {
                 String zkservers = cmd.getOptionValue("zkservers", "localhost:2181");
@@ -186,39 +211,79 @@ public class TestClient
                 int bkthrottle = Integer.valueOf(cmd.getOptionValue("bkthrottle", "10000"));
                 TestClient c = new TestClient(zkservers, bkensemble, bkquorum, bkthrottle);
                 if (cmd.hasOption("sync")) {
-                    c.writeSameEntryBatchSync(sb.toString().getBytes(), count);
+                    //c.writeSameEntryBatchSync(sb.toString().getBytes(), count);
                 } else {
-                    c.writeSameEntryBatch(sb.toString().getBytes(), count);
+                    //c.writeSameEntryBatch(sb.toString().getBytes(), count);
                 }
                 //c.writeConsecutiveEntriesBatch(Integer.parseInt(args[0]));
                 c.closeHandle();
             } catch (Exception e) {
                 LOG.error("Exception occurred", e);
             } 
-        } else if (target.equals("fs")) {
-            String path = cmd.getOptionValue("path", "/foobar");
-
+        } else if (target.equals("fs") || target.equals("hdfs")) {
             try {
-                TestClient c = new TestClient(new FileOutputStream(path));
-                c.writeSameEntryBatchFS(sb.toString().getBytes(), count, cmd.hasOption("sync"));
-            } catch(FileNotFoundException e) {
-                LOG.error("File not found", e);
-            }
-        } else if (target.equals("hdfs")) {
-            String path = cmd.getOptionValue("path", "/foobar");
+                int numFiles = Integer.valueOf(cmd.getOptionValue("numfiles", "1"));
+                
+                int numThreads = Math.min(numFiles, 1000);
+                byte[] data = sb.toString().getBytes();
+                long runid = System.currentTimeMillis();
+                List<Callable<Long>> clients = new ArrayList<Callable<Long>>();
+                if (target.equals("hdfs")) { 
+                    FileSystem fs = FileSystem.get(new Configuration());
+                    LOG.info("Default replication for HDFS: {}", fs.getDefaultReplication());
 
-            try {
-                FileSystem fs = FileSystem.get(new Configuration());
-                LOG.info("Default replication for HDFS: {}", fs.getDefaultReplication());
-                TestClient c = new TestClient(fs.create(new Path(path)));
-                c.writeSameEntryBatchFS(sb.toString().getBytes(), count, cmd.hasOption("sync"));
-            } catch(IOException e) {
+                    List<FSDataOutputStream> streams = new ArrayList<FSDataOutputStream>();
+                    for (int i = 0; i < numFiles; i++) {
+                        String path = cmd.getOptionValue("path", "/foobar");
+                        streams.add(fs.create(new Path(path + runid + "_" + i)));
+                    }
+
+                    for (int i = 0; i < numThreads; i++) {
+                        clients.add(new HDFSClient(streams, data, runfor));
+                    }
+                } else {
+                    List<FileOutputStream> streams = new ArrayList<FileOutputStream>();
+                    for (int i = 0; i < numFiles; i++) {
+                        String path = cmd.getOptionValue("path", "/foobar " + i);
+                        streams.add(new FileOutputStream(path + runid + "_" + i));
+                    }
+
+                    for (int i = 0; i < numThreads; i++) {
+                        clients.add(new FileClient(streams, data, runfor));
+                    }
+                }
+                
+                ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+                
+                long start = System.currentTimeMillis();
+
+                List<Future<Long>> results = executor.invokeAll(clients,
+                                                                10, TimeUnit.MINUTES);
+                long end = System.currentTimeMillis();
+                long count = 0;
+                for (Future<Long> r : results) {
+                    if (!r.isDone()) {
+                        LOG.warn("Job didn't complete");
+                        System.exit(2);
+                    }
+                    long c = r.get();
+                    if (c == 0) {
+                        LOG.warn("Task didn't complete");
+                    }
+                    count += c;
+                }
+                long time = end-start;
+                LOG.info("Finished processing writes (ms): {} TPT: {} op/s",
+                         time, count/((double)time/1000));
+                executor.shutdown();
+            } catch(Exception e) {
                 LOG.error("File not found", e);
             }
         } else {
             System.err.println("Unknown option: " + target);
             System.exit(2);
         }
+        timeouter.cancel();
     }
 
     void writeSameEntryBatch(byte[] data, int times) throws InterruptedException {
@@ -310,6 +375,84 @@ public class TestClient
                 }
             } catch (Exception e) {
                 LOG.warn("Exceptin in sync thread", e);
+            }
+        }
+    }
+
+    static class HDFSClient implements Callable<Long> {
+        final List<FSDataOutputStream> streams;
+        final byte[] data;
+        final long time;
+        final Random r;
+
+        HDFSClient(List<FSDataOutputStream> streams, byte[] data, long time) {
+            this.streams = streams;
+            this.data = data;
+            this.time = time;
+            this.r = new Random(System.identityHashCode(this));
+        }
+        
+        public Long call() {
+            try {
+                long count = 0;
+                long start = System.currentTimeMillis();
+                long stopat = start + time;
+                while(System.currentTimeMillis() < stopat) {
+                    FSDataOutputStream stream = streams.get(r.nextInt(streams.size()));
+                    synchronized(stream) {
+                        stream.write(data);
+                        stream.flush();
+                        stream.hflush();
+                    }
+                    count++;
+                }
+
+                long endtime = System.currentTimeMillis();
+                long time = (System.currentTimeMillis() - start);
+                LOG.info("Worker finished processing writes (ms): {} TPT: {} op/s",
+                         time, count/((double)time/1000));
+                return count;
+            } catch(Exception e) {
+                return 0L;
+            }
+        }
+    }
+
+    static class FileClient implements Callable<Long> {
+        final List<FileOutputStream> streams;
+        final byte[] data;
+        final long time;
+        final Random r;
+
+        FileClient(List<FileOutputStream> streams, byte[] data, long time) {
+            this.streams = streams;
+            this.data = data;
+            this.time = time;
+            this.r = new Random(System.identityHashCode(this));
+        }
+        
+        public Long call() {
+            try {
+                long count = 0;
+                long start = System.currentTimeMillis();
+
+                long stopat = start + time;
+                while(System.currentTimeMillis() < stopat) {
+                    FileOutputStream stream = streams.get(r.nextInt(streams.size()));
+                    synchronized(stream) {
+                        stream.write(data);
+                        stream.flush();
+                        stream.getChannel().force(false);
+                    }
+                    count++;
+                }
+
+                long endtime = System.currentTimeMillis();
+                long time = (System.currentTimeMillis() - start);
+                LOG.info("Worker finished processing writes (ms): {} TPT: {} op/s", time, count/((double)time/1000));
+                return count;
+            } catch(Exception e) {
+                return 0L;
             }
         }
     }

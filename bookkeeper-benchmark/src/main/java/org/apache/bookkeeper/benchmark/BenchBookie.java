@@ -171,7 +171,7 @@ public class BenchBookie {
         int entryCount = 5000;
         long startTime = System.nanoTime();
         for(long entry = 0; entry < entryCount; entry++) {
-            ChannelBuffer toSend = ChannelBuffers.buffer(128);
+            ChannelBuffer toSend = ChannelBuffers.buffer(1024);
             toSend.resetReaderIndex();
             toSend.resetWriterIndex();
             toSend.writeLong(ledger);
@@ -192,7 +192,7 @@ public class BenchBookie {
         startTime = System.currentTimeMillis();
         tc = new ThroughputCallback();
         for(long entry = 0; entry < entryCount; entry++) {
-            ChannelBuffer toSend = ChannelBuffers.buffer(128);
+            ChannelBuffer toSend = ChannelBuffers.buffer(1024);
             toSend.resetReaderIndex();
             toSend.resetWriterIndex();
             toSend.writeLong(ledger);
@@ -204,6 +204,10 @@ public class BenchBookie {
         tc.waitFor(entryCount);
         endTime = System.currentTimeMillis();
         LOG.info("Throughput: " + ((long)entryCount)*1000/(endTime-startTime));
+
+        bc.close();
+        channelFactory.releaseExternalResources();
+        executor.shutdown();
     }
 
 }
