@@ -347,9 +347,13 @@ public class Bookie extends Thread {
         checkEnvironment(this.zk);
 
         ledgerManager = LedgerManagerFactory.newLedgerManager(conf, this.zk);
-
+        
         syncThread = new SyncThread(conf);
-        ledgerStorage = new InterleavedLedgerStorage(conf, ledgerManager);
+        if (conf.getBoolean("perFileLedgerManager", false)) {
+            ledgerStorage = new PerFileLedgerStorage(conf, ledgerManager);
+        } else {
+            ledgerStorage = new InterleavedLedgerStorage(conf, ledgerManager);
+        }
         handles = new HandleFactoryImpl(ledgerStorage);
         // instantiate the journal
         journal = new Journal(conf);
