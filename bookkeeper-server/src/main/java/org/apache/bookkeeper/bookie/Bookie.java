@@ -21,34 +21,25 @@
 
 package org.apache.bookkeeper.bookie;
 
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.io.FilenameFilter;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Map;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.bookkeeper.meta.LedgerManager;
 import org.apache.bookkeeper.meta.LedgerManagerFactory;
 import org.apache.bookkeeper.bookie.BookieException;
+import org.apache.bookkeeper.bookie.Journal.JournalScanner;
 import org.apache.bookkeeper.conf.ServerConfiguration;
 import org.apache.bookkeeper.jmx.BKMBeanInfo;
 import org.apache.bookkeeper.jmx.BKMBeanRegistry;
@@ -70,20 +61,14 @@ import org.apache.zookeeper.ZooDefs.Ids;
 public class Bookie extends Thread {
     static Logger LOG = LoggerFactory.getLogger(Bookie.class);
 
-    final static long MB = 1024 * 1024L;
-    // max journal file size
-    final long maxJournalSize;
-    // number journal files kept before marked journal
-    final int maxBackupJournals;
-
     final File journalDirectory;
-
     final File ledgerDirectories[];
-
     final ServerConfiguration conf;
 
     final SyncThread syncThread;
     final LedgerManager ledgerManager;
+    final LedgerStorage ledgerStorage;
+    final Journal journal;
     final HandleFactory handles;
 
     static final long METAENTRY_ID_LEDGER_KEY = -0x1000;
@@ -105,7 +90,7 @@ public class Bookie extends Thread {
 
     // jmx related beans
     BookieBean jmxBookieBean;
-    LedgerCacheBean jmxLedgerCacheBean;
+    BKMBeanInfo jmxLedgerStorageBean;
 
     Map<Long, byte[]> masterKeyCache = Collections.synchronizedMap(new HashMap<Long, byte[]>());
 
@@ -137,12 +122,15 @@ public class Bookie extends Thread {
         }
     }
 
-    EntryLogger entryLogger;
-    LedgerCache ledgerCache;
-    // This is the thread that garbage collects the entry logs that do not
-    // contain any active ledgers in them; and compacts the entry logs that
-    // has lower remaining percentage to reclaim disk space.
-    final GarbageCollectorThread gcThread;
+    // Write Callback do nothing
+    class NopWriteCallback implements WriteCallback {
+        @Override
+        public void writeComplete(int rc, long ledgerId, long entryId,
+                                  InetSocketAddress addr, Object ctx) {
+            LOG.debug("Finished writing entry {} @ ledger {} for {} : {}",
+                      new Object[] { entryId, ledgerId, addr, rc });
+        }
+    }
 
     /**
      * SyncThread is a background thread which flushes ledger index pages periodically.
@@ -185,7 +173,7 @@ public class Bookie extends Thread {
                 synchronized(this) {
                     try {
                         wait(flushInterval);
-                        if (!entryLogger.testAndClearSomethingWritten()) {
+                        if (!ledgerStorage.isFlushRequired()) {
                             continue;
                         }
                     } catch (InterruptedException e) {
@@ -204,54 +192,22 @@ public class Bookie extends Thread {
                     break;
                 }
 
-                lastLogMark.markLog();
+                // journal mark log
+                journal.markLog();
 
                 boolean flushFailed = false;
                 try {
-                    ledgerCache.flushLedger(true);
+                    ledgerStorage.flush();
                 } catch (IOException e) {
                     LOG.error("Exception flushing Ledger", e);
-                    flushFailed = true;
-                }
-                try {
-                    entryLogger.flush();
-                } catch (IOException e) {
-                    LOG.error("Exception flushing entry logger", e);
                     flushFailed = true;
                 }
 
                 // if flush failed, we should not roll last mark, otherwise we would
                 // have some ledgers are not flushed and their journal entries were lost
                 if (!flushFailed) {
-
-                    lastLogMark.rollLog();
-
-                    // list the journals that have been marked
-                    List<Long> logs = listJournalIds(journalDirectory, new JournalIdFilter() {
-                        @Override
-                        public boolean accept(long journalId) {
-                            if (journalId < lastLogMark.lastMark.txnLogId) {
-                                return true;
-                            } else {
-                                return false;
-                            }
-                        }
-                    });
-
-                    // keep MAX_BACKUP_JOURNALS journal files before marked journal
-                    if (logs.size() >= maxBackupJournals) {
-                        int maxIdx = logs.size() - maxBackupJournals;
-                        for (int i=0; i<maxIdx; i++) {
-                            long id = logs.get(i);
-                            // make sure the journal id is smaller than marked journal id
-                            if (id < lastLogMark.lastMark.txnLogId) {
-                                File journalFile = new File(journalDirectory, Long.toHexString(id) + ".txn");
-                                journalFile.delete();
-                                LOG.info("garbage collected journal " + journalFile.getName());
-                            }
-                        }
-                    }
-
+                    journal.rollLog();
+                    journal.gcJournals();
                 }
 
                 // clear flushing flag
@@ -378,27 +334,6 @@ public class Bookie extends Thread {
         return currentDirs;
     }
 
-    /**
-     * Scanner used to do entry log compaction
-     */
-    class EntryLogCompactionScanner implements EntryLogger.EntryLogScanner {
-        @Override
-        public boolean accept(long ledgerId) {
-            // bookie has no knowledge about which ledger is deleted
-            // so just accept all ledgers.
-            return true;
-        }
-
-        @Override
-        public void process(long ledgerId, ByteBuffer buffer)
-            throws IOException {
-            try {
-                Bookie.this.addEntryByLedgerId(ledgerId, buffer);
-            } catch (BookieException be) {
-                throw new IOException(be);
-            }
-        }
-    }
 
     public Bookie(ServerConfiguration conf)
             throws IOException, KeeperException, InterruptedException, BookieException {
@@ -406,8 +341,6 @@ public class Bookie extends Thread {
         this.conf = conf;
         this.journalDirectory = getCurrentDirectory(conf.getJournalDir());
         this.ledgerDirectories = getCurrentDirectories(conf.getLedgerDirs());
-        this.maxJournalSize = conf.getMaxJournalSize() * MB;
-        this.maxBackupJournals = conf.getMaxBackupJournals();
 
         // instantiate zookeeper client to initialize ledger manager
         this.zk = instantiateZookeeperClient(conf);
@@ -416,83 +349,25 @@ public class Bookie extends Thread {
         ledgerManager = LedgerManagerFactory.newLedgerManager(conf, this.zk);
 
         syncThread = new SyncThread(conf);
-        entryLogger = new EntryLogger(conf);
-        ledgerCache = new LedgerCacheImpl(conf, ledgerManager);
-        gcThread = new GarbageCollectorThread(conf, this.zk, ledgerCache, entryLogger,
-                ledgerManager, new EntryLogCompactionScanner());
-        handles = new HandleFactoryImpl(entryLogger, ledgerCache);
+        ledgerStorage = new InterleavedLedgerStorage(conf, ledgerManager);
+        handles = new HandleFactoryImpl(ledgerStorage);
+        // instantiate the journal
+        journal = new Journal(conf);
 
         // replay journals
         readJournal();
     }
 
     private void readJournal() throws IOException, BookieException {
-        lastLogMark.readLog();
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Last Log Mark : " + lastLogMark);
-        }
-        final long markedLogId = lastLogMark.txnLogId;
-        List<Long> logs = listJournalIds(journalDirectory, new JournalIdFilter() {
+        journal.replay(new JournalScanner() {
             @Override
-            public boolean accept(long journalId) {
-                if (journalId < markedLogId) {
-                    return false;
-                }
-                return true;
-            }
-        });
-        // last log mark may be missed due to no sync up before
-        // validate filtered log ids only when we have markedLogId
-        if (markedLogId > 0) {
-            if (logs.size() == 0 || logs.get(0) != markedLogId) {
-                throw new IOException("Recovery log " + markedLogId + " is missing");
-            }
-        }
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Try to relay journal logs : " + logs);
-        }
-        // TODO: When reading in the journal logs that need to be synced, we
-        // should use BufferedChannels instead to minimize the amount of
-        // system calls done.
-        ByteBuffer lenBuff = ByteBuffer.allocate(4);
-        ByteBuffer recBuff = ByteBuffer.allocate(64*1024);
-        for(Long id: logs) {
-            JournalChannel recLog;
-            if(id == markedLogId) {
-                long markedLogPosition = lastLogMark.txnLogPosition;
-                recLog = new JournalChannel(journalDirectory, id, markedLogPosition);
-            } else {
-                recLog = new JournalChannel(journalDirectory, id);
-            }
-
-            while(true) {
-                lenBuff.clear();
-                fullRead(recLog, lenBuff);
-                if (lenBuff.remaining() != 0) {
-                    break;
-                }
-                lenBuff.flip();
-                int len = lenBuff.getInt();
-                if (len == 0) {
-                    break;
-                }
-                recBuff.clear();
-                if (recBuff.remaining() < len) {
-                    recBuff = ByteBuffer.allocate(len);
-                }
-                recBuff.limit(len);
-                if (fullRead(recLog, recBuff) != len) {
-                    // This seems scary, but it just means that this is where we
-                    // left off writing
-                    break;
-                }
-                recBuff.flip();
+            public void process(int journalVersion, long offset, ByteBuffer recBuff) throws IOException {
                 long ledgerId = recBuff.getLong();
                 long entryId = recBuff.getLong();
                 try {
                     LOG.debug("Replay journal - ledger id : {}, entry id : {}.", ledgerId, entryId);
                     if (entryId == METAENTRY_ID_LEDGER_KEY) {
-                        if (recLog.getFormatVersion() >= 3) {
+                        if (journalVersion >= 3) {
                             int masterKeyLen = recBuff.getInt();
                             byte[] masterKey = new byte[masterKeyLen];
 
@@ -500,13 +375,13 @@ public class Bookie extends Thread {
                             masterKeyCache.put(ledgerId, masterKey);
                         } else {
                             throw new IOException("Invalid journal. Contains journalKey "
-                                    + " but layout version (" + recLog.getFormatVersion()
+                                    + " but layout version (" + journalVersion
                                     + ") is too old to hold this");
                         }
                     } else {
                         byte[] key = masterKeyCache.get(ledgerId);
                         if (key == null) {
-                            key = ledgerCache.readMasterKey(ledgerId);
+                            key = ledgerStorage.readMasterKey(ledgerId);
                         }
                         LedgerDescriptor handle = handles.getHandle(ledgerId, key);
 
@@ -515,19 +390,21 @@ public class Bookie extends Thread {
                     }
                 } catch (NoLedgerException nsle) {
                     LOG.debug("Skip replaying entries of ledger {} since it was deleted.", ledgerId);
-                    continue;
+                } catch (BookieException be) {
+                    throw new IOException(be);
                 }
             }
-            recLog.close();
-        }
+        });
     }
 
     synchronized public void start() {
         setDaemon(true);
         LOG.debug("I'm starting a bookie with journal directory " + journalDirectory.getName());
+        // start bookie thread
         super.start();
         syncThread.start();
-        gcThread.start();
+
+        ledgerStorage.start();
         // set running here.
         // since bookie server use running as a flag to tell bookie server whether it is alive
         // if setting it in bookie thread, the watcher might run before bookie thread.
@@ -538,39 +415,6 @@ public class Bookie extends Thread {
             LOG.error("Couldn't register bookie with zookeeper, shutting down", e);
             shutdown(ExitCode.ZK_REG_FAIL);
         }
-    }
-
-    public static interface JournalIdFilter {
-        public boolean accept(long journalId);
-    }
-
-    /**
-     * List all journal ids by a specified journal id filer
-     *
-     * @param journalDir journal dir
-     * @param filter journal id filter
-     * @return list of filtered ids
-     */
-    public static List<Long> listJournalIds(File journalDir, JournalIdFilter filter) {
-        File logFiles[] = journalDir.listFiles();
-        List<Long> logs = new ArrayList<Long>();
-        for(File f: logFiles) {
-            String name = f.getName();
-            if (!name.endsWith(".txn")) {
-                continue;
-            }
-            String idString = name.split("\\.")[0];
-            long id = Long.parseLong(idString, 16);
-            if (filter != null) {
-                if (filter.accept(id)) {
-                    logs.add(id);
-                }
-            } else {
-                logs.add(id);
-            }
-        }
-        Collections.sort(logs);
-        return logs;
     }
 
     /**
@@ -584,13 +428,12 @@ public class Bookie extends Thread {
             BKMBeanRegistry.getInstance().register(jmxBookieBean, parent);
 
             try {
-                jmxLedgerCacheBean = this.ledgerCache.getJMXBean();
-                BKMBeanRegistry.getInstance().register(jmxLedgerCacheBean, jmxBookieBean);
+                jmxLedgerStorageBean = this.ledgerStorage.getJMXBean();
+                BKMBeanRegistry.getInstance().register(jmxLedgerStorageBean, jmxBookieBean);
             } catch (Exception e) {
                 LOG.warn("Failed to register with JMX for ledger cache", e);
-                jmxLedgerCacheBean = null;
+                jmxLedgerStorageBean = null;
             }
-
         } catch (Exception e) {
             LOG.warn("Failed to register with JMX", e);
             jmxBookieBean = null;
@@ -602,8 +445,8 @@ public class Bookie extends Thread {
      */
     public void unregisterJMX() {
         try {
-            if (jmxLedgerCacheBean != null) {
-                BKMBeanRegistry.getInstance().unregister(jmxLedgerCacheBean);
+            if (jmxLedgerStorageBean != null) {
+                BKMBeanRegistry.getInstance().unregister(jmxLedgerStorageBean);
             }
         } catch (Exception e) {
             LOG.warn("Failed to unregister with JMX", e);
@@ -616,7 +459,7 @@ public class Bookie extends Thread {
             LOG.warn("Failed to unregister with JMX", e);
         }
         jmxBookieBean = null;
-        jmxLedgerCacheBean = null;
+        jmxLedgerStorageBean = null;
     }
 
 
@@ -704,224 +547,27 @@ public class Bookie extends Thread {
         return newZk;
     }
 
-    private static int fullRead(JournalChannel fc, ByteBuffer bb) throws IOException {
-        int total = 0;
-        while(bb.remaining() > 0) {
-            int rc = fc.read(bb);
-            if (rc <= 0) {
-                return total;
-            }
-            total += rc;
-        }
-        return total;
-    }
-
-    static class QueueEntry {
-        QueueEntry(ByteBuffer entry, long ledgerId, long entryId,
-                   WriteCallback cb, Object ctx) {
-            this.entry = entry.duplicate();
-            this.cb = cb;
-            this.ctx = ctx;
-            this.ledgerId = ledgerId;
-            this.entryId = entryId;
-        }
-
-        ByteBuffer entry;
-
-        long ledgerId;
-
-        long entryId;
-
-        WriteCallback cb;
-
-        Object ctx;
-    }
-
-    LinkedBlockingQueue<QueueEntry> queue = new LinkedBlockingQueue<QueueEntry>();
-
-    class LastLogMark {
-        long txnLogId;
-        long txnLogPosition;
-        LastLogMark lastMark;
-        LastLogMark(long logId, long logPosition) {
-            this.txnLogId = logId;
-            this.txnLogPosition = logPosition;
-        }
-        synchronized void setLastLogMark(long logId, long logPosition) {
-            txnLogId = logId;
-            txnLogPosition = logPosition;
-        }
-        synchronized void markLog() {
-            lastMark = new LastLogMark(txnLogId, txnLogPosition);
-        }
-        synchronized void rollLog() {
-            byte buff[] = new byte[16];
-            ByteBuffer bb = ByteBuffer.wrap(buff);
-            // we should record <logId, logPosition> marked in markLog
-            // which is safe since records before lastMark have been
-            // persisted to disk (both index & entry logger)
-            bb.putLong(lastMark.txnLogId);
-            bb.putLong(lastMark.txnLogPosition);
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("RollLog to persist last marked log : " + lastMark);
-            }
-            for(File dir: ledgerDirectories) {
-                File file = new File(dir, "lastMark");
-                try {
-                    FileOutputStream fos = new FileOutputStream(file);
-                    fos.write(buff);
-                    fos.getChannel().force(true);
-                    fos.close();
-                } catch (IOException e) {
-                    LOG.error("Problems writing to " + file, e);
-                }
-            }
-        }
-
-        /**
-         * Read last mark from lastMark file.
-         * The last mark should first be max journal log id,
-         * and then max log position in max journal log.
-         */
-        synchronized void readLog() {
-            byte buff[] = new byte[16];
-            ByteBuffer bb = ByteBuffer.wrap(buff);
-            for(File dir: ledgerDirectories) {
-                File file = new File(dir, "lastMark");
-                try {
-                    FileInputStream fis = new FileInputStream(file);
-                    fis.read(buff);
-                    fis.close();
-                    bb.clear();
-                    long i = bb.getLong();
-                    long p = bb.getLong();
-                    if (i > txnLogId) {
-                        txnLogId = i;
-                        if(p > txnLogPosition) {
-                          txnLogPosition = p;
-                        }
-                    }
-                } catch (IOException e) {
-                    LOG.error("Problems reading from " + file + " (this is okay if it is the first time starting this bookie");
-                }
-            }
-        }
-
-        @Override
-        public String toString() {
-            StringBuilder sb = new StringBuilder();
-            
-            sb.append("LastMark: logId - ").append(txnLogId)
-              .append(" , position - ").append(txnLogPosition);
-            
-            return sb.toString();
-        }
-    }
-
-    private LastLogMark lastLogMark = new LastLogMark(0, 0);
-
-    LastLogMark getLastLogMark() {
-        return lastLogMark;
-    }
-
     public boolean isRunning() {
         return running;
     }
 
-    /**
-     * A thread used for persisting journal entries to journal files.
-     * 
-     * <p>
-     * Besides persisting journal entries, it also takes responsibility of
-     * rolling journal files when a journal file reaches journal file size
-     * limitation.
-     * </p>
-     * <p>
-     * During journal rolling, it first closes the writing journal, generates
-     * new journal file using current timestamp, and continue persistence logic.
-     * Those journals will be garbage collected in SyncThread.
-     * </p>
-     */
     @Override
     public void run() {
-        LinkedList<QueueEntry> toFlush = new LinkedList<QueueEntry>();
-        ByteBuffer lenBuff = ByteBuffer.allocate(4);
+        // bookie thread wait for journal thread
         try {
-            long logId = 0;
-            JournalChannel logFile = null;
-            BufferedChannel bc = null;
-            long nextPrealloc = 0;
-            long lastFlushPosition = 0;
-
-            QueueEntry qe = null;
-            while (true) {
-                // new journal file to write
-                if (null == logFile) {
-                    logId = System.currentTimeMillis();
-                    logFile = new JournalChannel(journalDirectory, logId);
-                    bc = logFile.getBufferedChannel();
-
-                    lastFlushPosition = 0;
-                }
-
-                if (qe == null) {
-                    if (toFlush.isEmpty()) {
-                        qe = queue.take();
-                    } else {
-                        qe = queue.poll();
-                        if (qe == null || bc.position() > lastFlushPosition + 512*1024) {
-                            //logFile.force(false);
-                            bc.flush(true);
-                            lastFlushPosition = bc.position();
-                            lastLogMark.setLastLogMark(logId, lastFlushPosition);
-                            for (QueueEntry e : toFlush) {
-                                e.cb.writeComplete(0, e.ledgerId, e.entryId, null, e.ctx);
-                            }
-                            toFlush.clear();
-
-                            // check whether journal file is over file limit
-                            if (bc.position() > maxJournalSize) {
-                                logFile.close();
-                                logFile = null;
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                if (isZkExpired) {
-                    LOG.warn("Exiting... zk client has expired.");
-                    break;
-                }
-                if (qe == null) { // no more queue entry
-                    continue;
-                }
-                lenBuff.clear();
-                lenBuff.putInt(qe.entry.remaining());
-                lenBuff.flip();
-                //
-                // we should be doing the following, but then we run out of
-                // direct byte buffers
-                // logFile.write(new ByteBuffer[] { lenBuff, qe.entry });
-                bc.write(lenBuff);
-                bc.write(qe.entry);
-
-                logFile.preAllocIfNeeded();
-
-                toFlush.add(qe);
-                qe = null;
-            }
-        } catch (Exception e) {
-            // if the bookie thread quits due to shutting down, it is ok
-            if (shuttingdown) {
-                LOG.warn("Bookie thread exits when shutting down", e);
-            } else {
-                // some error found in bookie thread and it quits
-                // following add operations to it would hang unit client timeout
-                // so we should let bookie server exists
-                LOG.error("Exception occurred in bookie thread and it quits : ", e);
-                shutdown(ExitCode.BOOKIE_EXCEPTION);
-            }
+            // start journal
+            journal.start();
+            // wait until journal quits
+            journal.join();
+        } catch (InterruptedException ie) {
+        }
+        // if the journal thread quits due to shutting down, it is ok
+        if (!shuttingdown) {
+            // some error found in journal thread and it quits
+            // following add operations to it would hang unit client timeout
+            // so we should let bookie server exists
+            LOG.error("Journal manager quits unexpectedly.");
+            shutdown(ExitCode.BOOKIE_EXCEPTION);
         }
     }
 
@@ -940,17 +586,17 @@ public class Bookie extends Thread {
                 this.exitCode = exitCode;
                 // mark bookie as in shutting down progress
                 shuttingdown = true;
-                // shut down gc thread, which depends on zookeeper client
-                // also compaction will write entries again to entry log file
-                gcThread.shutdown();
+
+                // Shutdown the EntryLogger which has the GarbageCollector Thread running
+                ledgerStorage.shutdown();
+
                 // Shutdown the ZK client
                 if(zk != null) zk.close();
-                this.interrupt();
+                // Shutdown journal
+                journal.shutdown();
                 this.join();
                 syncThread.shutdown();
 
-                // Shutdown the EntryLogger which has the GarbageCollector Thread running
-                entryLogger.shutdown();
                 // close Ledger Manager
                 ledgerManager.close();
                 // setting running to false here, so watch thread in bookie server know it only after bookie shut down
@@ -959,7 +605,7 @@ public class Bookie extends Thread {
         } catch (InterruptedException ie) {
             LOG.error("Interrupted during shutting down bookie : ", ie);
         }
-        return exitCode;
+        return this.exitCode;
     }
 
     /** 
@@ -982,15 +628,7 @@ public class Bookie extends Thread {
             bb.put(masterKey);
             bb.flip();
 
-            queue.add(new QueueEntry(bb,
-                                     ledgerId, METAENTRY_ID_LEDGER_KEY,
-                                     new WriteCallback() {
-                                         public void writeComplete(int rc, long ledgerId, 
-                                                 long entryId, InetSocketAddress addr,
-                                                 Object ctx) {
-                                             // do nothing
-                                         }
-                                     }, null));
+            journal.logAddEntry(bb, new NopWriteCallback(), null);
             masterKeyCache.put(ledgerId, masterKey);
         }
         return l;
@@ -998,7 +636,7 @@ public class Bookie extends Thread {
 
     protected void addEntryByLedgerId(long ledgerId, ByteBuffer entry)
         throws IOException, BookieException {
-        byte[] key = ledgerCache.readMasterKey(ledgerId);
+        byte[] key = ledgerStorage.readMasterKey(ledgerId);
         LedgerDescriptor handle = handles.getHandle(ledgerId, key);
         handle.addEntry(entry);
     }
@@ -1016,7 +654,7 @@ public class Bookie extends Thread {
         if (LOG.isTraceEnabled()) {
             LOG.trace("Adding " + entryId + "@" + ledgerId);
         }
-        queue.add(new QueueEntry(entry, ledgerId, entryId, cb, ctx));
+        journal.logAddEntry(entry, cb, ctx);
     }
 
     /**

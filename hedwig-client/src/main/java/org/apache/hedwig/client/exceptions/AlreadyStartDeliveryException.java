@@ -15,17 +15,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-package org.apache.bookkeeper.bookie;
-
-import java.io.File;
+package org.apache.hedwig.client.exceptions;
 
 /**
- * Bookie MBean
+ * This is a Hedwig client side exception when the local client wants to
+ * startDelivery using another message handler before stopping previous one.
  */
-public interface BookieMXBean {
-    /**
-     * @return log entry queue length
-     */
-    public int getQueueLength();
+public class AlreadyStartDeliveryException extends Exception {
+
+    private static final long serialVersionUID = 873259807218723524L;
+
+    public AlreadyStartDeliveryException(String message) {
+        super(message);
+    }
+
+    public AlreadyStartDeliveryException(String message, Throwable t) {
+        super(message, t);
+    }
+
 }
