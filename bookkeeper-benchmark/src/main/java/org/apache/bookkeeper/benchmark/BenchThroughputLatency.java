@@ -91,8 +91,7 @@ public class BenchThroughputLatency implements AddCallback, Runnable {
         this.throttle = throttle;
 
         ClientConfiguration conf = new ClientConfiguration();
-        conf.setThrottleValue(100000);
-        conf.setZkServers(servers);
+        conf.setThrottleValue(100000).setReadTimeout(600).setZkServers(servers);
         this.servers = servers;
 
         bk = new BookKeeper(conf);
