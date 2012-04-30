@@ -193,9 +193,15 @@ public class BenchThroughputLatency implements AddCallback, Runnable {
         }
         LOG.info("Sent: "  + sent);
         try {
+            int i = 0;
             synchronized (this) {
-                while(this.counter.get() > 0)
+                while(this.counter.get() > 0) {
                     Thread.sleep(1000);
+                    i++;
+                    if (i > 30) {
+                        break;
+                    }
+                }
             }
         } catch(InterruptedException e) {
             LOG.error("Interrupted while waiting", e);
