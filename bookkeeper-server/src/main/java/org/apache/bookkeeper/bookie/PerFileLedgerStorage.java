@@ -172,13 +172,10 @@ class PerFileLedgerStorage implements LedgerStorage {
         FileChannel fc = new RandomAccessFile(lf, "rw").getChannel();
         LedgerFile f = new LedgerFile(fc);
         if (fc.size() == 0) {
-            LOG.info("Size is zero");
             signature.clear();
             fc.write(signature);
-            LOG.info("Size is {} {}", fc.size(), fc.position());
             f.markDirty();
         } else {
-            LOG.info("Size is {}", fc.size());
             fc.position(fc.size());
         }
         return f;
