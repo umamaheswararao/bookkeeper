@@ -49,22 +49,24 @@ public class LedgerMetadata {
     public static final int IN_RECOVERY = -102;
 
     public static final int LOWEST_COMPAT_METADATA_FORMAT_VERSION = 0;
-    public static final int CURRENT_METADATA_FORMAT_VERSION = 1;
+    public static final int CURRENT_METADATA_FORMAT_VERSION = 2;
     public static final String VERSION_KEY = "BookieMetadataFormatVersion";
 
     int metadataFormatVersion = 0;
 
     int ensembleSize;
-    int quorumSize;
+    int writeQuorumSize;
+    int ackQuorumSize;
     long length;
     long close;
     private SortedMap<Long, ArrayList<InetSocketAddress>> ensembles = new TreeMap<Long, ArrayList<InetSocketAddress>>();
     ArrayList<InetSocketAddress> currentEnsemble;
     volatile int znodeVersion = -1;
     
-    public LedgerMetadata(int ensembleSize, int quorumSize) {
+    public LedgerMetadata(int ensembleSize, int writeQuorumSize, int ackQuorumSize) {
         this.ensembleSize = ensembleSize;
-        this.quorumSize = quorumSize;
+        this.writeQuorumSize = writeQuorumSize;
+        this.ackQuorumSize = ackQuorumSize;
 
         /*
          * It is set in PendingReadOp.readEntryComplete, and
@@ -76,7 +78,7 @@ public class LedgerMetadata {
     };
 
     private LedgerMetadata() {
-        this(0, 0);
+        this(0, 0, 0);
     }
 
     /**
@@ -145,7 +147,8 @@ public class LedgerMetadata {
     public byte[] serialize() {
         StringBuilder s = new StringBuilder();
         s.append(VERSION_KEY).append(tSplitter).append(metadataFormatVersion).append(lSplitter);
-        s.append(quorumSize).append(lSplitter).append(ensembleSize).append(lSplitter).append(length);
+        s.append(writeQuorumSize).append(lSplitter).append(ackQuorumSize).append(lSplitter)
+            .append(ensembleSize).append(lSplitter).append(length);
 
         for (Map.Entry<Long, ArrayList<InetSocketAddress>> entry : ensembles.entrySet()) {
             s.append(lSplitter).append(entry.getKey());
@@ -208,7 +211,12 @@ public class LedgerMetadata {
             }
 
             lc.znodeVersion = version;
-            lc.quorumSize = new Integer(lines[i++]);
+            lc.writeQuorumSize = new Integer(lines[i++]);
+            if (lc.metadataFormatVersion >= 2) {
+                lc.ackQuorumSize = new Integer(lines[i++]);
+            } else {
+                lc.ackQuorumSize = lc.writeQuorumSize;
+            }
             lc.ensembleSize = new Integer(lines[i++]);
             lc.length = new Long(lines[i++]);
 
@@ -276,7 +284,8 @@ public class LedgerMetadata {
 
         if (metadataFormatVersion != newMeta.metadataFormatVersion ||
             ensembleSize != newMeta.ensembleSize ||
-            quorumSize != newMeta.quorumSize ||
+            writeQuorumSize != newMeta.writeQuorumSize ||
+            ackQuorumSize != newMeta.ackQuorumSize ||
             length != newMeta.length ||
             close != newMeta.close) {
             return false;

@@ -74,7 +74,7 @@ public class GcLedgersTest extends LedgerManagerTestCase {
                         }
                     }
                 }
-            }, new LedgerMetadata(1, 1));
+                }, new LedgerMetadata(1, 1, 1));
         }
         synchronized (expected) {
             try {
