@@ -280,11 +280,24 @@ public class BookKeeper {
      * @param ctx
      *          optional control object
      */
-    public void asyncCreateLedger(final int ensSize, final int qSize, final DigestType digestType,
+    public void asyncCreateLedger(final int ensSize,
+                                  final int writeQuorumSize,
+                                  final DigestType digestType,
+                                  final byte[] passwd, final CreateCallback cb, final Object ctx)
+    {
+        asyncCreateLedger(ensSize, writeQuorumSize, writeQuorumSize, digestType, passwd, cb, ctx);
+    }
+
+    public void asyncCreateLedger(final int ensSize,
+                                  final int writeQuorumSize,
+                                  final int ackQuorumSize,
+                                  final DigestType digestType,
                                   final byte[] passwd, final CreateCallback cb, final Object ctx) {
         withZKConnected(new ZKConnectCallback() {
                 public void connected() {
-                    new LedgerCreateOp(BookKeeper.this, ensSize, qSize, digestType, passwd, cb, ctx)
+                    new LedgerCreateOp(BookKeeper.this, ensSize,
+                                       writeQuorumSize, ackQuorumSize,
+                                       digestType, passwd, cb, ctx)
                         .initiate();
                 }
                 public void connectionFailed(int code) {
@@ -324,14 +337,20 @@ public class BookKeeper {
      * @throws BKException
      */
     public LedgerHandle createLedger(int ensSize, int qSize,
-                                     DigestType digestType, byte passwd[]) 
+                                     DigestType digestType, byte passwd[])
+            throws InterruptedException, BKException {
+        return createLedger(ensSize, qSize, qSize, digestType, passwd);
+    }
+
+    public LedgerHandle createLedger(int ensSize, int writeQuorumSize, int ackQuorumSize,
+                                     DigestType digestType, byte passwd[])
             throws InterruptedException, BKException {
         SyncCounter counter = new SyncCounter();
         counter.inc();
         /*
          * Calls asynchronous version
          */
-        asyncCreateLedger(ensSize, qSize, digestType, passwd, 
+        asyncCreateLedger(ensSize, writeQuorumSize, ackQuorumSize, digestType, passwd,
                           new SyncCreateCallback(), counter);
 
         /*
