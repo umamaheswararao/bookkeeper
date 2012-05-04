@@ -86,7 +86,10 @@ public class BenchReadThroughputLatency {
         long absoluteLimit = 5000000;
         LedgerHandle lh = null;
         try {
-            bk = new BookKeeper(zkservers);
+            ClientConfiguration conf = new ClientConfiguration();
+            conf.setReadTimeout(600).setZkServers(zkservers);
+
+            bk = new BookKeeper(conf);
             while (true) {
                 lh = bk.openLedgerNoRecovery(ledgerId, BookKeeper.DigestType.CRC32, 
                                              passwd);
@@ -105,7 +108,7 @@ public class BenchReadThroughputLatency {
                 long starttime = System.nanoTime();
                 
                 while (lastRead < lastConfirmed) {
-                    long nextLimit = lastRead + 10000;
+                    long nextLimit = lastRead + 100000;
                     long readTo = Math.min(nextLimit, lastConfirmed);
                     Enumeration<LedgerEntry> entries = lh.readEntries(lastRead+1, readTo);
                     lastRead = readTo;

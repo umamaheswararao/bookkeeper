@@ -120,7 +120,7 @@ public class BufferedChannel
     }*/
     synchronized public int read(ByteBuffer buff, long pos) throws IOException {
         if (readBuffer == null) {
-            readBuffer = ByteBuffer.allocateDirect(capacity);
+            readBuffer = ByteBuffer.allocateDirect(1024*1024*1);
             readBufferStartPosition = Long.MIN_VALUE;
         }
         long prevPos = pos;
